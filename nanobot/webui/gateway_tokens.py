@@ -22,6 +22,8 @@ class GatewayTokenStore:
     issued_tokens: dict[str, float] = field(default_factory=dict)
     issued_token_audiences: dict[str, IssuedTokenAudience] = field(default_factory=dict)
     api_tokens: dict[str, float] = field(default_factory=dict)
+    # Multi-user mode: single-use WebSocket handshake tickets, ticket -> (expiry, user_id).
+    ws_tickets: dict[str, tuple[float, str]] = field(default_factory=dict)
 
     def check_api_token(self, request: WsRequest) -> bool:
         self._purge_expired_api_tokens()
@@ -79,7 +81,27 @@ class GatewayTokenStore:
             return None
         return audience
 
+    def issue_ws_ticket(self, user_id: str, ttl_s: int | float) -> str | None:
+        """Mint a one-shot handshake ticket for ``user_id``; ``None`` when too many are outstanding."""
+        now = time.monotonic()
+        for ticket, (expiry, _) in list(self.ws_tickets.items()):
+            if now > expiry:
+                self.ws_tickets.pop(ticket, None)
+        if len(self.ws_tickets) >= self.max_tokens:
+            return None
+        ticket = f"nbwk_{secrets.token_urlsafe(32)}"
+        self.ws_tickets[ticket] = (now + float(ttl_s), user_id)
+        return ticket
+
+    def take_ws_ticket(self, ticket: str | None) -> str | None:
+        """Consume a handshake ticket and return the account it was issued to."""
+        entry = self.ws_tickets.pop(ticket, None) if ticket else None
+        if entry is None or time.monotonic() > entry[0]:
+            return None
+        return entry[1]
+
     def clear(self) -> None:
+        self.ws_tickets.clear()
         self.issued_tokens.clear()
         self.issued_token_audiences.clear()
         self.api_tokens.clear()

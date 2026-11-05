@@ -28,6 +28,7 @@ from nanobot.pairing.events import PairingChanged
 from nanobot.session.webui_turns import (
     clear_websocket_turn_if_current,
     mark_websocket_turn_transcript_persistence_failed,
+    websocket_turn_scope,
     websocket_turn_transcript_persistence_failed,
 )
 from nanobot.webui.media_gateway import WebUIMediaGateway
@@ -91,8 +92,11 @@ class WebUIOutboundDelivery:
         transcripts: WebUITranscriptRecorder,
         temporary_chats: WebUITemporaryChats,
         session_projection: WebUISessionProjection,
+        account: str | None = None,
     ) -> None:
         self._transport = transport
+        # Multi-user mode: the account this delivery serves; selects its turn table.
+        self._turn_scope = websocket_turn_scope(account)
         self._media = media
         self._transcripts = transcripts
         self._temporary_chats = temporary_chats
@@ -198,7 +202,7 @@ class WebUIOutboundDelivery:
             finally:
                 if event.status == "idle":
                     clear_websocket_turn_if_current(
-                        msg.chat_id, owner, preserve_persistence_failure=True,
+                        msg.chat_id, owner, preserve_persistence_failure=True, **self._turn_scope,
                     )
             return
         if isinstance(event, TurnEndEvent):
@@ -260,8 +264,8 @@ class WebUIOutboundDelivery:
             chat_id, persisted=persisted, metadata=metadata, phase=phase,
         )
 
-    @staticmethod
     def _retain_turn_on_transcript_failure(
+        self,
         chat_id: str,
         *,
         persisted: bool,
@@ -271,7 +275,7 @@ class WebUIOutboundDelivery:
         if not persisted and phase in {"answer", "complete"} and (metadata or {}).get("webui") is True:
             owner = (metadata or {}).get(WEBSOCKET_TURN_OWNER_METADATA_KEY)
             mark_websocket_turn_transcript_persistence_failed(
-                chat_id, owner if isinstance(owner, str) else None,
+                chat_id, owner if isinstance(owner, str) else None, **self._turn_scope,
             )
         return persisted
 
@@ -441,7 +445,7 @@ class WebUIOutboundDelivery:
         elif persistence == "turn_complete":
             prior_failure = (
                 (metadata or {}).get("webui") is True
-                and websocket_turn_transcript_persistence_failed(chat_id, turn_owner)
+                and websocket_turn_transcript_persistence_failed(chat_id, turn_owner, **self._turn_scope)
             )
             persisted = await self._persist_turn_transcript_event(
                 chat_id, body, metadata=metadata, phase="complete",
@@ -449,7 +453,7 @@ class WebUIOutboundDelivery:
             )
             if persisted:
                 # A durable incomplete marker allows HTTP recovery after restart.
-                clear_websocket_turn_if_current(chat_id, turn_owner)
+                clear_websocket_turn_if_current(chat_id, turn_owner, **self._turn_scope)
             self.discard(chat_id)
         await self._fanout(recipients, body, label=f" {body['event']} ")
 

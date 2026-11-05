@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
+from nanobot.utils import confined_files
+
 if TYPE_CHECKING:
     from dulwich.objects import Blob, Commit, ObjectID, Tree
     from dulwich.refs import Ref
@@ -48,10 +50,13 @@ class GitStore:
     def __init__(self, workspace: Path, tracked_files: list[str]):
         self._workspace = workspace
         self._tracked_files = tracked_files
+        # The account's sandbox can write .git (hooks, filter drivers) and plant links in place
+        # of tracked files; dulwich would run or follow them in the gateway, so it stays off.
+        self._disabled = confined_files.confinement_root(workspace) is not None
 
     def is_initialized(self) -> bool:
         """Check if the git repo has been initialized."""
-        return (self._workspace / ".git").is_dir()
+        return not self._disabled and (self._workspace / ".git").is_dir()
 
 
     def init(self) -> bool:
@@ -60,7 +65,7 @@ class GitStore:
         Creates .gitignore and makes an initial commit.
         Returns True if a new repo was created, False if already exists.
         """
-        if self.is_initialized():
+        if self._disabled or self.is_initialized():
             return False
 
         if self._is_inside_git_repo():

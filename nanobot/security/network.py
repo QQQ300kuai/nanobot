@@ -27,6 +27,9 @@ _BLOCKED_NETWORKS = [
 
 _URL_RE = re.compile(r"https?://[^\s\"'`;|<>]+", re.IGNORECASE)
 _allowed_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+# Multi-user: exact addresses of administrator-defined MCP servers. Kept apart from the config
+# whitelist (which every config reload replaces) and never fed from user input.
+_catalog_hosts: frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address] = frozenset()
 
 
 def is_loopback_host(host: str) -> bool:
@@ -51,6 +54,16 @@ def configure_ssrf_whitelist(cidrs: list[str]) -> None:
     _allowed_networks = nets
 
 
+def configure_catalog_hosts(addresses: list[str]) -> None:
+    """Allow exactly these host addresses, taken from the administrator's MCP catalog."""
+    global _catalog_hosts
+    hosts: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    for text in addresses:
+        with suppress(ValueError):
+            hosts.add(_normalize_addr(ipaddress.ip_address(text)))
+    _catalog_hosts = frozenset(hosts)
+
+
 def _normalize_addr(
     addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
@@ -68,6 +81,8 @@ def _normalize_addr(
 
 def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     normalized = _normalize_addr(addr)
+    if normalized in _catalog_hosts:
+        return False
     if _allowed_networks and any(normalized in net for net in _allowed_networks):
         return False
     return any(normalized in net for net in _BLOCKED_NETWORKS)

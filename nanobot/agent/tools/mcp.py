@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import traceback
 import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack, suppress
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 import httpx
@@ -35,6 +37,7 @@ if TYPE_CHECKING:
 
     from nanobot.agent.tools.mcp_oauth import MCPOAuthHandlers
     from nanobot.config.schema import Config, MCPServerConfig
+    from nanobot.multiuser.catalog import Catalog, CatalogEntry
 
 # Transient stream failures. Retrying also requires an operation safe to replay
 # or proof that the tool request has not started.
@@ -522,6 +525,24 @@ class _MCPWrapperBase(Tool):
     _server_name: str
     _name: str
     _replay_safe: bool
+    # Set only on wrappers projected into an account's registry (multi-user catalog servers).
+    _user_id: str | None = None
+    _media_root: Path | None = None
+
+    def bound_to(self, user_id: str, media_root: Path) -> "_MCPWrapperBase":
+        """A copy of this wrapper that acts for one account over the same shared session.
+
+        Calls carry the account in ``_meta.user_id`` and MCP-returned images land in its media root.
+        Reconnects stay with the provider that owns the connection.
+        """
+        bound = copy.copy(self)
+        bound._user_id = user_id
+        bound._media_root = media_root
+        bound._reconnect = None
+        return bound
+
+    def _call_meta(self) -> dict[str, Any]:
+        return {"meta": {"user_id": self._user_id}} if self._user_id is not None else {}
 
     def _set_mcp_connection(
         self, session: ClientSession, server_name: str, *, replay_safe: bool,
@@ -742,7 +763,9 @@ class MCPToolWrapper(_MCPWrapperBase):
 
     async def execute(self, **kwargs: Any) -> str:
         result = await self._request_with_recovery(
-            lambda session: session.call_tool(self._original_name, arguments=kwargs),
+            lambda session: session.call_tool(
+                self._original_name, arguments=kwargs, **self._call_meta(),
+            ),
             self._tool_timeout,
             "tool",
         )
@@ -806,6 +829,7 @@ class MCPToolWrapper(_MCPWrapperBase):
                 model=str(arguments.get("model") or ""),
                 save_dir="generated",
                 provider=f"mcp:{self._server_name}",
+                media_root=self._media_root,
             )
         except (ArtifactError, OSError) as exc:
             logger.warning(
@@ -1363,8 +1387,12 @@ class MCPProvider:
         *,
         server_loader: MCPServerLoader | None = None,
         network: NetworkConfig | None = None,
+        catalog: Catalog | None = None,
     ) -> None:
         self._servers = dict(servers)
+        # Multi-user: administrator-defined servers, connected on demand and projected per account.
+        self._catalog = catalog
+        self._catalog_connections: dict[tuple[str, str | None], _CatalogConnection] = {}
         self._network = (network or NetworkConfig()).model_copy(deep=True)
         self._registry = registry
         self._server_loader = server_loader or _load_current_servers
@@ -1686,16 +1714,131 @@ class MCPProvider:
             return
         await _close_mcp_connection(server_name, connection)
 
+    async def registry_for(
+        self,
+        user_id: str,
+        enabled: Iterable[str],
+        params: Mapping[str, Mapping[str, str]],
+        *,
+        media_dir: Path,
+    ) -> ToolRegistry:
+        """Tools of the catalog servers ``user_id`` enabled, over connections shared where safe.
+
+        Entries the catalog does not define are ignored, so a user can only ever reach
+        administrator-defined servers. Servers shared between accounts receive the caller in
+        ``_meta.user_id``; per-user instances also get the ``X-Nanobot-User`` header or the
+        ``NANOBOT_USER_ID`` environment variable.
+        """
+        projected = ToolRegistry()
+        if self._catalog is None:
+            return projected
+        for name in sorted(set(enabled)):
+            entry = self._catalog.get(name)
+            if entry is None or entry.config is None:
+                continue
+            scratch = await self._catalog_tools(entry, user_id, params.get(name, {}))
+            if scratch is None:
+                continue
+            for tool_name in scratch.tool_names:
+                tool = scratch.get(tool_name)
+                if isinstance(tool, _MCPWrapperBase):
+                    projected.register(tool.bound_to(user_id, media_dir))
+        return projected
+
+    async def _catalog_tools(
+        self, entry: CatalogEntry, user_id: str, params: Mapping[str, str],
+    ) -> ToolRegistry | None:
+        missing = [k for k, spec in entry.param_schema.items() if spec.required and not params.get(k)]
+        if missing:
+            logger.info("MCP catalog '{}' skipped for {}: missing {}", entry.name, user_id, missing)
+            return None
+        cfg = _resolve_catalog_config(entry, user_id, params)
+        key = (entry.name, user_id if entry.instance_per_user else None)
+        signature = cfg.model_dump_json()
+        async with self._lock:
+            if self._closing:
+                return None
+            current = self._catalog_connections.get(key)
+            if current is not None and current.signature == signature:
+                return current.registry
+            if current is not None:
+                del self._catalog_connections[key]
+                await _close_mcp_connection(entry.name, current.connection)
+            registry = ToolRegistry()
+            connected = await connect_mcp_servers({entry.name: cfg}, registry, network=self._network)
+            connection = connected.get(entry.name)
+            if connection is None:
+                return None
+            self._catalog_connections[key] = _CatalogConnection(connection, registry, signature)
+            return registry
+
+    async def release_user(self, user_id: str) -> None:
+        """Close the per-user instances of ``user_id``; shared connections stay up."""
+        async with self._lock:
+            keys = [k for k in self._catalog_connections if k[1] == user_id]
+            for key in keys:
+                held = self._catalog_connections.pop(key)
+                await _close_mcp_connection(key[0], held.connection)
+
     async def aclose(self) -> None:
         """Close every connection while excluding reconnect and hot reload."""
         self._closing = True
         async with self._lock:
             connections = dict(self._connections)
             self._connections.clear()
+            for held in self._catalog_connections.values():
+                connections[f"catalog:{id(held)}"] = held.connection
+            self._catalog_connections.clear()
             self._runtime_statuses.clear()
             for name in self._servers:
                 _unregister_server_tools(self._registry, name)
             await _close_mcp_connections(connections)
+
+
+class _CatalogConnection:
+    def __init__(self, connection: MCPConnection, registry: ToolRegistry, signature: str) -> None:
+        self.connection = connection
+        self.registry = registry
+        self.signature = signature
+
+
+IDENTITY_HEADER = "X-Nanobot-User"
+IDENTITY_ENV = "NANOBOT_USER_ID"
+
+
+def _resolve_catalog_config(
+    entry: CatalogEntry, user_id: str, params: Mapping[str, str],
+) -> MCPServerConfig:
+    """The administrator's config with this user's parameters and, for own instances, identity."""
+    from nanobot.multiuser.catalog import PLACEHOLDER_RE
+
+    assert entry.config is not None
+    known = {key: params[key] for key in entry.param_schema if key in params}
+
+    def fill(text: str) -> str:
+        return PLACEHOLDER_RE.sub(lambda m: known.get(m.group(1), ""), text)
+
+    cfg = entry.config.model_copy(deep=True)
+    cfg.args = [fill(arg) for arg in cfg.args]
+    cfg.env = {key: fill(value) for key, value in cfg.env.items()}
+    cfg.headers = {key: fill(value) for key, value in cfg.headers.items()}
+    if entry.instance_per_user:
+        if cfg.command:
+            cfg.env[IDENTITY_ENV] = user_id
+        else:
+            cfg.headers[IDENTITY_HEADER] = user_id
+    return cfg
+
+
+def replace_mcp_tools(target: ToolRegistry, source: ToolRegistry) -> None:
+    """Make the MCP tools in ``target`` exactly those of ``source``; other tools are untouched."""
+    for name in list(target.tool_names):
+        if isinstance(target.get(name), _MCPWrapperBase):
+            target.unregister(name)
+    for name in source.tool_names:
+        tool = source.get(name)
+        if tool is not None:
+            target.register(tool)
 
 
 def _server_signature(cfg: Any) -> Any:

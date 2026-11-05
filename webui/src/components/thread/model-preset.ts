@@ -1,6 +1,6 @@
 import type { ModelPresetOption } from "@/components/thread/ModelPresetBadge";
 import { inferProviderFromModelName, providerDisplayLabel } from "@/lib/provider-brand";
-import type { SettingsPayload } from "@/lib/types";
+import type { ChatModelsPayload } from "@/lib/types";
 
 function compactModelName(modelName: string | null): string | null {
   if (!modelName) return null;
@@ -19,9 +19,9 @@ export interface ModelBadgeInfo {
 }
 
 function modelPresetForBadge(
-  settings: SettingsPayload | null,
+  settings: ChatModelsPayload | null,
   scopedPreset: string | null,
-): SettingsPayload["model_presets"][number] | null {
+): ChatModelsPayload["model_presets"][number] | null {
   if (!settings) return null;
   const presets = settings.model_presets ?? [];
   if (scopedPreset) {
@@ -37,7 +37,7 @@ function modelPresetForBadge(
 
 export function toModelBadgeInfo(
   modelName: string | null,
-  settings: SettingsPayload | null,
+  settings: ChatModelsPayload | null,
   modelPreset: string | null = null,
 ): ModelBadgeInfo {
   const scopedPreset = modelPreset?.trim() || null;
@@ -74,14 +74,14 @@ export function toModelBadgeInfo(
 }
 
 export function modelPresetOptionsFromSettings(
-  settings: SettingsPayload | null,
+  settings: ChatModelsPayload | null,
 ): ModelPresetOption[] {
   if (!settings) return [];
   const order = new Map(
     (settings.model_call_order ?? []).map((name, index) => [name.trim(), index]),
   );
   return (settings.model_presets ?? [])
-    .filter((preset) => !preset.is_default && preset.name.trim())
+    .filter((preset) => preset.name.trim() && (!preset.is_default || settings.model_presets.length === 1))
     .sort((a, b) => (
       (order.get(a.name.trim()) ?? Number.POSITIVE_INFINITY)
       - (order.get(b.name.trim()) ?? Number.POSITIVE_INFINITY)

@@ -221,8 +221,8 @@ def normalize_webui_sidebar_state(raw: Any) -> dict[str, Any]:
     return state
 
 
-def read_webui_sidebar_state() -> dict[str, Any]:
-    path = webui_sidebar_state_path()
+def read_webui_sidebar_state(path: Path | None = None) -> dict[str, Any]:
+    path = path or webui_sidebar_state_path()
     if not path.is_file():
         return default_webui_sidebar_state()
     try:
@@ -237,9 +237,9 @@ def read_webui_sidebar_state() -> dict[str, Any]:
     return normalize_webui_sidebar_state(raw)
 
 
-def read_legacy_archived_keys() -> list[str]:
+def read_legacy_archived_keys(path: Path | None = None) -> list[str]:
     """Do not mark the import complete when the source cannot be read."""
-    path = webui_sidebar_state_path()
+    path = path or webui_sidebar_state_path()
     try:
         with path.open(encoding="utf-8") as source:
             raw = json.load(source)
@@ -250,16 +250,16 @@ def read_legacy_archived_keys() -> list[str]:
     return _clean_string_list(cast(dict[str, Any], raw).get("archived_keys"))
 
 
-def remove_legacy_archived_keys() -> None:
+def remove_legacy_archived_keys(path: Path | None = None) -> None:
     with _SIDEBAR_STATE_WRITE_LOCK:
-        path = webui_sidebar_state_path()
+        path = path or webui_sidebar_state_path()
         try:
             with path.open(encoding="utf-8") as source:
                 raw = json.load(source)
         except FileNotFoundError:
             return
         if isinstance(raw, dict) and "archived_keys" in raw:
-            _write_webui_sidebar_state(cast(dict[str, Any], raw))
+            _write_webui_sidebar_state(cast(dict[str, Any], raw), path)
 
 
 def write_webui_sidebar_state(raw: dict[str, Any]) -> dict[str, Any]:
@@ -267,13 +267,13 @@ def write_webui_sidebar_state(raw: dict[str, Any]) -> dict[str, Any]:
         return _write_webui_sidebar_state(raw)
 
 
-def write_webui_sidebar_preferences(raw: dict[str, Any]) -> dict[str, Any]:
+def write_webui_sidebar_preferences(raw: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
     """Archive-only changes must not rewrite the unchanged preference file."""
     with _SIDEBAR_STATE_WRITE_LOCK:
         target = normalize_webui_sidebar_state(raw)
         current: object = None
         try:
-            with webui_sidebar_state_path().open("rb") as source:
+            with (path or webui_sidebar_state_path()).open("rb") as source:
                 encoded = source.read(_MAX_STATE_FILE_BYTES + 1)
             if len(encoded) <= _MAX_STATE_FILE_BYTES:
                 current = json.loads(encoded)
@@ -287,14 +287,14 @@ def write_webui_sidebar_preferences(raw: dict[str, Any]) -> dict[str, Any]:
                 target["updated_at"] = previous_timestamp
                 if target == current:
                     return target
-        return _persist_webui_sidebar_state(target)
+        return _persist_webui_sidebar_state(target, path)
 
 
-def _write_webui_sidebar_state(raw: dict[str, Any]) -> dict[str, Any]:
-    return _persist_webui_sidebar_state(normalize_webui_sidebar_state(raw))
+def _write_webui_sidebar_state(raw: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
+    return _persist_webui_sidebar_state(normalize_webui_sidebar_state(raw), path)
 
 
-def _persist_webui_sidebar_state(state: dict[str, Any]) -> dict[str, Any]:
+def _persist_webui_sidebar_state(state: dict[str, Any], path: Path | None = None) -> dict[str, Any]:
     state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     encoded = json.dumps(
         state,
@@ -305,7 +305,7 @@ def _persist_webui_sidebar_state(state: dict[str, Any]) -> dict[str, Any]:
     if len(encoded) > _MAX_STATE_FILE_BYTES:
         raise ValueError("sidebar state is too large")
 
-    path = webui_sidebar_state_path()
+    path = path or webui_sidebar_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     with open(tmp, "wb") as f:
@@ -325,11 +325,11 @@ def _persist_webui_sidebar_state(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-async def ensure_webui_archives_imported(sessions: SessionState) -> None:
+async def ensure_webui_archives_imported(sessions: SessionState, path: Path | None = None) -> None:
     if not await sessions.archives_imported():
-        legacy = await asyncio.to_thread(read_legacy_archived_keys)
+        legacy = await asyncio.to_thread(read_legacy_archived_keys, path)
         await sessions.import_archives(legacy)
-        await asyncio.to_thread(remove_legacy_archived_keys)
+        await asyncio.to_thread(remove_legacy_archived_keys, path)
 
 
 async def ensure_webui_session_archives(sessions: SessionState) -> list[str]:
@@ -338,8 +338,12 @@ async def ensure_webui_session_archives(sessions: SessionState) -> list[str]:
 
 
 class WebUISidebarState:
-    def __init__(self, sessions: SessionState | None) -> None:
+    def __init__(self, sessions: SessionState | None, path: Path | None = None) -> None:
         self._sessions = sessions
+        # Preference file; ``None`` is the shared config-scoped file. Accounts use their own.
+        self.path = path
+        # Only an explicit account file is passed on, so the shared calls keep their shape.
+        self._path_args: tuple[Path, ...] = () if path is None else (path,)
         self._lock = asyncio.Lock()
         self._readers = 0
         self._readers_drained = asyncio.Event()
@@ -361,11 +365,11 @@ class WebUISidebarState:
     async def read(self) -> dict[str, Any]:
         async with self._read_snapshot():
             if self._sessions is None:
-                preferences = await asyncio.to_thread(read_webui_sidebar_state)
+                preferences = await asyncio.to_thread(read_webui_sidebar_state, *self._path_args)
                 return {**preferences, "archived_keys": []}
-            await ensure_webui_archives_imported(self._sessions)
+            await ensure_webui_archives_imported(self._sessions, *self._path_args)
             preferences, archived = await asyncio.gather(
-                asyncio.to_thread(read_webui_sidebar_state), self._sessions.archived_keys(),
+                asyncio.to_thread(read_webui_sidebar_state, *self._path_args), self._sessions.archived_keys(),
             )
             return {**preferences, "archived_keys": archived}
 
@@ -377,11 +381,11 @@ class WebUISidebarState:
 
     async def _write_snapshot(self, raw: dict[str, Any]) -> dict[str, Any]:
         if self._sessions is None:
-            preferences = await asyncio.to_thread(write_webui_sidebar_preferences, raw)
+            preferences = await asyncio.to_thread(write_webui_sidebar_preferences, raw, *self._path_args)
             return {**preferences, "archived_keys": []}
-        await ensure_webui_archives_imported(self._sessions)
+        await ensure_webui_archives_imported(self._sessions, *self._path_args)
         preferences, archived = await asyncio.gather(
-            asyncio.to_thread(write_webui_sidebar_preferences, raw), self._sessions.archived_keys(),
+            asyncio.to_thread(write_webui_sidebar_preferences, raw, *self._path_args), self._sessions.archived_keys(),
             return_exceptions=True,
         )
         # Settle both branches before releasing admission, including failed reads.

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hmac
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 from websockets.asyncio.server import ServerConnection
 from websockets.http11 import Request as WsRequest
 
+from nanobot.multiuser.identity import normalize_admins
 from nanobot.runtime_admission import RuntimeMaintenanceError
 from nanobot.webui.gateway_tokens import GatewayTokenStore
 from nanobot.webui.http_utils import (
@@ -20,6 +21,7 @@ from nanobot.webui.ws_http import GatewayHTTPHandler
 
 if TYPE_CHECKING:
     from nanobot.channels.websocket.runtime import WebSocketConfig
+    from nanobot.multiuser.accounts import AccountStore
 
 
 def is_websocket_upgrade(request: WsRequest) -> bool:
@@ -43,11 +45,20 @@ class WebUIGatewayEndpoint:
         config: WebSocketConfig,
         http: GatewayHTTPHandler,
         tokens: GatewayTokenStore,
+        accounts: AccountStore | None = None,
+        admins: Iterable[str] = (),
     ) -> None:
         self._config = config
         self._http = http
         self._tokens = tokens
+        self._accounts = accounts
+        self._admins = normalize_admins(admins)
         self.webui_connections: set[ServerConnection] = set()
+        self._connection_users: dict[ServerConnection, str] = {}
+
+    def user_for(self, connection: ServerConnection) -> str | None:
+        """Return the account bound to a connection at handshake time (multi-user mode only)."""
+        return self._connection_users.get(connection)
 
     async def process_request(
         self,
@@ -85,6 +96,19 @@ class WebUIGatewayEndpoint:
         headers: Any = None,
     ) -> Any:
         """Authorize a WebSocket upgrade and remember trusted WebUI connections."""
+        if self._accounts is not None:
+            # Multi-user mode: only a one-shot ticket (POST /auth/ws-ticket) establishes identity,
+            # so the long-lived account token never appears in a URL. Static, issued and proxy
+            # credentials carry no user and are not accepted either.
+            user_id = self._tokens.take_ws_ticket(query_first(query, "ticket"))
+            if user_id is None or not self._accounts.is_member(user_id):
+                return connection.respond(401, "Unauthorized")
+            self._connection_users[connection] = user_id
+            # Trusted WebUI controls (mutations, restart, user shell) are admin-only.
+            if user_id in self._admins:
+                self.webui_connections.add(connection)
+            return None
+
         if is_trusted_proxy_authenticated_request(connection, headers or {}, self._config):
             self.webui_connections.add(connection)
             return None
@@ -116,6 +140,8 @@ class WebUIGatewayEndpoint:
 
     def discard_connection(self, connection: ServerConnection) -> None:
         self.webui_connections.discard(connection)
+        self._connection_users.pop(connection, None)
 
     def clear(self) -> None:
         self.webui_connections.clear()
+        self._connection_users.clear()

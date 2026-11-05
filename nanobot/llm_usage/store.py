@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from nanobot.llm_usage.models import LLMCallRecord
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_DAYS_RETAINED = 400
 MAX_CALLS_RETAINED = 100_000
 
@@ -165,7 +165,7 @@ class LLMUsageStore:
         self._last_prune_utc_day: int | None = None
         self._writes_since_size_prune = 0
         self._write_version = 0
-        self._cached_payload_key: tuple[int, str, str, int, int] | None = None
+        self._cached_payload_key: tuple[int, str, str, int, int, str | None] | None = None
         self._cached_payload: dict[str, Any] | None = None
 
     def _connect(self) -> sqlite3.Connection:
@@ -212,7 +212,8 @@ class LLMUsageStore:
                 ttft_ms INTEGER,
                 timed_requests INTEGER,
                 error_status_code INTEGER,
-                error_kind TEXT
+                error_kind TEXT,
+                user_id TEXT
             );
             CREATE INDEX IF NOT EXISTS llm_calls_started_at_idx
                 ON llm_calls(started_at_ms);
@@ -220,10 +221,28 @@ class LLMUsageStore:
                 ON llm_calls(provider, model, started_at_ms);
             """
         )
+        self._migrate_user_id(connection)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._connection = connection
         self._connection_pid = pid
         return connection
+
+    @staticmethod
+    def _migrate_user_id(connection: sqlite3.Connection) -> None:
+        """Databases written before per-user accounting gain the column; old rows keep NULL."""
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(llm_calls)")}
+        if "user_id" not in columns:
+            try:
+                connection.execute("ALTER TABLE llm_calls ADD COLUMN user_id TEXT")
+            except sqlite3.OperationalError:
+                # Another process migrated first.
+                if "user_id" not in {
+                    row["name"] for row in connection.execute("PRAGMA table_info(llm_calls)")
+                }:
+                    raise
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS llm_calls_user_time_idx ON llm_calls(user_id, started_at_ms)"
+        )
 
     def _read_connection(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -283,6 +302,7 @@ class LLMUsageStore:
             ),
             _clean_status_code(call.error_status_code),
             _clean_error_kind(call.error_kind),
+            call.user_id[:120] if call.user_id else None,
         )
         with self._lock:
             connection = self._connect()
@@ -293,9 +313,9 @@ class LLMUsageStore:
                     finish_reason, input_tokens, output_tokens, total_tokens,
                     cache_read_tokens, cache_write_tokens, reported_tokens,
                     estimated_tokens, generation_ms, measured_output_tokens,
-                    ttft_ms, timed_requests, error_status_code, error_kind
+                    ttft_ms, timed_requests, error_status_code, error_kind, user_id
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 values,
@@ -343,6 +363,7 @@ class LLMUsageStore:
         end_ms: int,
         group_by: tuple[str, ...] = (),
         limit: int | None = None,
+        user_id: str | None = None,
     ) -> list[sqlite3.Row]:
         selected = f"{', '.join(group_by)}, " if group_by else ""
         where = "started_at_ms < ?"
@@ -350,6 +371,9 @@ class LLMUsageStore:
         if start_ms is not None:
             where = "started_at_ms >= ? AND started_at_ms < ?"
             params = [start_ms, end_ms]
+        if user_id is not None:
+            where += " AND user_id = ?"
+            params.append(user_id)
         query = f"SELECT {selected}{_AGGREGATE_SQL} FROM llm_calls WHERE {where}"
         if group_by:
             query += f" GROUP BY {', '.join(group_by)} ORDER BY total_tokens DESC"
@@ -365,19 +389,21 @@ class LLMUsageStore:
         start_ms: int,
         end_ms: int,
         timezone_name: str,
+        user_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        user_clause = "AND user_id = ?" if user_id is not None else ""
         query = f"""
             SELECT llm_usage_local_day(started_at_ms, ?) AS date, source,
                    {_AGGREGATE_SQL}
             FROM llm_calls
-            WHERE started_at_ms >= ? AND started_at_ms < ?
+            WHERE started_at_ms >= ? AND started_at_ms < ? {user_clause}
             GROUP BY date, source
             ORDER BY date, source
         """
-        rows = connection.execute(
-            query,
-            (timezone_name, start_ms, end_ms),
-        ).fetchall()
+        params: tuple[object, ...] = (timezone_name, start_ms, end_ms)
+        if user_id is not None:
+            params += (user_id,)
+        rows = connection.execute(query, params).fetchall()
         by_date: dict[str, dict[str, Any]] = {}
         for row in rows:
             day = cast(str | None, row["date"])
@@ -403,7 +429,9 @@ class LLMUsageStore:
         days: int = 371,
         timezone_name: str | None = None,
         now: datetime | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
+        """Usage over all calls, or only those of one account when ``user_id`` is given."""
         zone = _zone(timezone_name)
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
@@ -422,6 +450,7 @@ class LLMUsageStore:
                 today.isoformat(),
                 write_version,
                 data_version,
+                user_id,
             )
             if self._cached_payload_key == cache_key and self._cached_payload is not None:
                 return deepcopy(self._cached_payload)
@@ -437,6 +466,7 @@ class LLMUsageStore:
                 start_ms=retained_start_ms,
                 end_ms=end_ms,
                 timezone_name=zone_name,
+                user_id=user_id,
             )
 
             requested_start = today - timedelta(days=safe_days - 1)
@@ -455,6 +485,7 @@ class LLMUsageStore:
                 end_ms=end_ms,
                 group_by=("provider", "model"),
                 limit=50,
+                user_id=user_id,
             )
             providers_30d = [
                 {
@@ -477,11 +508,12 @@ class LLMUsageStore:
                            COALESCE(SUM(total_tokens), 0) AS total_tokens
                     FROM llm_calls
                     WHERE started_at_ms >= ? AND started_at_ms < ?
+                        AND (? IS NULL OR user_id = ?)
                     GROUP BY date, provider, model
                     HAVING SUM(total_tokens) > 0
                     ORDER BY date, provider, model
                     """,
-                    (zone_name, last_30_start_ms, end_ms),
+                    (zone_name, last_30_start_ms, end_ms, user_id, user_id),
                 )
             ]
 
@@ -503,7 +535,11 @@ class LLMUsageStore:
 
             latest = (
                 connection
-                .execute("SELECT MAX(started_at_ms) AS updated_at_ms FROM llm_calls")
+                .execute(
+                    "SELECT MAX(started_at_ms) AS updated_at_ms FROM llm_calls "
+                    "WHERE ? IS NULL OR user_id = ?",
+                    (user_id, user_id),
+                )
                 .fetchone()
             )
             updated_at_ms = int(latest["updated_at_ms"] or 0) if latest is not None else 0
@@ -557,6 +593,32 @@ class LLMUsageStore:
                 self._cached_payload_key = cache_key
                 self._cached_payload = payload
         return deepcopy(payload)
+
+    def summary_by_user(
+        self,
+        *,
+        days: int = 30,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-account totals over the last ``days`` days, heaviest first; unowned calls have ``user_id`` None."""
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        start_ms = int((current - timedelta(days=max(1, days))).timestamp() * 1000)
+        end_ms = int(current.timestamp() * 1000) + 1
+        with self._lock:
+            self._connect()  # creates or migrates the database before the read-only connection opens
+        connection = self._read_connection()
+        try:
+            rows = self._aggregate(
+                connection=connection,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                group_by=("user_id",),
+            )
+        finally:
+            connection.close()
+        return [{"user_id": row["user_id"], **_as_int_row(row)} for row in rows]
 
     def recent_calls(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Return bounded metadata rows for diagnostics; never returns content."""

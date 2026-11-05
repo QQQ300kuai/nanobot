@@ -41,6 +41,7 @@ import {
   fetchInstalledCliApps,
   fetchMcpPresets,
   fetchSettings,
+  fetchChatModels,
   fetchWorkspaces,
   fetchWorkspaceDirectories,
   listSlashCommands,
@@ -63,6 +64,7 @@ import type {
   FileReferenceMetadata,
   RoundUsage,
   SettingsPayload,
+  ChatModelsPayload,
   SlashCommand,
   SkillSummary,
   UIMessage,
@@ -536,6 +538,10 @@ export function ThreadShell({
     selectItems: installedMcpPresetsFromPayload,
   });
   const [settings, setSettings] = useState<SettingsPayload | null>(settingsSnapshot);
+  const [chatModels, setChatModels] = useState<ChatModelsPayload | null>(null);
+  const hasChatModels = webuiCapabilities.includes("webui.chat-models.v1");
+  const modelSettings = hasChatModels ? chatModels : settings;
+  const supportsModelFollow = webuiCapabilities.includes("webui.chat-model-follow.v1");
   const [modelFallback, setModelFallback] = useState<{
     chatId: string;
     model: string;
@@ -801,19 +807,16 @@ export function ThreadShell({
     setLocalModelPreset(null);
   }, [session?.key, sessionModelPreset]);
   const configuredPresetNames = useMemo(
-    () => new Set(settings?.model_presets.map((preset) => preset.name) ?? []),
-    [settings],
+    () => new Set(modelSettings?.model_presets.map((preset) => preset.name) ?? []),
+    [modelSettings],
   );
-  const activeModelPreset = (
-    (localModelPreset && (!settings || configuredPresetNames.has(localModelPreset))
-      ? localModelPreset
-      : null)
-    || (sessionModelPreset && (!settings || configuredPresetNames.has(sessionModelPreset))
-      ? sessionModelPreset
-      : null)
-    || settings?.agent.model_preset
-    || "default"
-  );
+  const explicitModelPreset = localModelPreset ?? sessionModelPreset;
+  const availableModelPreset = explicitModelPreset
+    && (!modelSettings || configuredPresetNames.has(explicitModelPreset))
+    ? explicitModelPreset : null;
+  const activeModelPreset = supportsModelFollow
+    ? (localModelPreset === "" ? "" : availableModelPreset ?? "")
+    : availableModelPreset || modelSettings?.agent.model_preset || "default";
   useEffect(() => {
     setModelFallback(null);
     if (!chatId) return;
@@ -844,12 +847,28 @@ export function ThreadShell({
   const handleModelPresetChange = useCallback((name: string) => {
     setLocalModelPreset(name);
     if (chatId) {
-      void client.sendSystemCommand(chatId, `/model ${name}`).catch(() => {});
+      void client.sendSystemCommand(chatId, name ? `/model ${name}` : "/model-follow").catch(() => {});
     }
   }, [chatId, client]);
+  const primaryPreset = modelSettings?.model_presets.find(
+    (preset) => preset.name === (modelSettings.agent.model_preset || "default"),
+  );
+  const recommendedModelName = primaryPreset && !primaryPreset.is_default
+    ? primaryPreset.name
+    : modelSettings?.agent.model.split("/").at(-1);
+  const recommendedModelLabel = recommendedModelName
+    ? t("thread.composer.followAdmin", { model: recommendedModelName }) : null;
   const modelPresetOptions = useMemo(
-    () => modelPresetOptionsFromSettings(settings),
-    [settings],
+    () => {
+      const options = modelPresetOptionsFromSettings(modelSettings);
+      if (!supportsModelFollow || !modelSettings) return options;
+      return [{
+        name: "", label: recommendedModelLabel ?? undefined,
+        model: modelSettings.agent.model,
+        provider: modelSettings.agent.resolved_provider || modelSettings.agent.provider,
+      }, ...options];
+    },
+    [modelSettings, recommendedModelLabel, supportsModelFollow],
   );
   const availableSlashCommands = useMemo(
     () => temporary
@@ -858,10 +877,12 @@ export function ThreadShell({
     [slashCommands, temporary],
   );
   const modelBadge = useMemo(
-    () => toModelBadgeInfo(modelName, settings, activeModelPreset),
-    [activeModelPreset, modelName, settings],
+    () => toModelBadgeInfo(modelName, modelSettings, activeModelPreset),
+    [activeModelPreset, modelName, modelSettings],
   );
-  const modelBadgeLabel = modelBadge.needsSetup
+  const modelBadgeLabel = supportsModelFollow && !activeModelPreset
+    ? recommendedModelLabel
+    : modelBadge.needsSetup
     ? t("thread.composer.chooseAI", { defaultValue: "Choose your AI" })
     : modelBadge.label;
   useEffect(() => {
@@ -884,25 +905,45 @@ export function ThreadShell({
 
   const refreshModelSettings = useCallback(async () => {
     try {
-      setSettings(await fetchSettings(getToken()));
+      if (hasChatModels) setChatModels(await fetchChatModels(getToken()));
+      else setSettings(await fetchSettings(getToken()));
     } catch {
       if (!settingsSnapshot) setSettings(null);
     }
-  }, [getToken, settingsSnapshot]);
+  }, [getToken, hasChatModels, settingsSnapshot]);
 
   useEffect(() => {
-    if (settingsSnapshot) {
-      setSettings(settingsSnapshot);
+    if (settingsSnapshot) setSettings(settingsSnapshot);
+    if (settingsSnapshot && !hasChatModels) {
       return;
     }
     if (!settingsLoading) void refreshModelSettings();
-  }, [refreshModelSettings, settingsLoading, settingsSnapshot]);
+  }, [hasChatModels, refreshModelSettings, settingsLoading, settingsSnapshot]);
 
   useEffect(() => {
     return client.onRuntimeModelUpdate(() => {
       void refreshModelSettings();
     });
   }, [client, refreshModelSettings]);
+
+  useEffect(() => {
+    if (!hasChatModels) return;
+    const refresh = () => { void refreshModelSettings(); };
+    window.addEventListener("focus", refresh);
+    const unsubscribe = client.onStatus((status) => {
+      if (status === "open") refresh();
+    });
+    return () => {
+      window.removeEventListener("focus", refresh);
+      unsubscribe();
+    };
+  }, [client, hasChatModels, refreshModelSettings]);
+
+  useEffect(() => {
+    if (localModelPreset && modelSettings && !configuredPresetNames.has(localModelPreset)) {
+      setLocalModelPreset(null);
+    }
+  }, [configuredPresetNames, localModelPreset, modelSettings]);
 
   const lastRunTurnId = chatId ? client.getRunTurnId(chatId) : null;
   const completedRunTurnId = chatId && lastRunTurnId && client.isRunCompleted(chatId, lastRunTurnId)

@@ -1262,6 +1262,35 @@ describe("ThreadShell", () => {
     expect(settingsRequest).toHaveBeenCalledTimes(success ? 0 : 1);
   });
 
+  it("selects an administrator model from the read-only catalog and recovers when it is deleted", async () => {
+    const client = makeClient();
+    let catalog = settingsWithFastPreset();
+    const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("/api/chat-models")
+      ? httpJson(catalog)
+      : new Response(null, { status: 403 }));
+    vi.stubGlobal("fetch", fetch);
+    render(wrap(client, <ThreadShell session={session("account-model")}
+      title="Account model" onToggleSidebar={() => {}} />, null, "tok",
+    ["webui.chat-models.v1", "webui.chat-model-follow.v1"]));
+
+    fireEvent.click(await screen.findByRole("button", { name: "deepseek-v4-pro (Recommended)" }));
+    fireEvent.click(await screen.findByRole("option", { name: /^fast\b/i }));
+    expect(client.sendSystemCommand).toHaveBeenCalledWith("account-model", "/model fast");
+    expect(await screen.findByLabelText("fast")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "fast" }));
+    fireEvent.click(await screen.findByRole("option", { name: "deepseek-v4-pro (Recommended)" }));
+    expect(client.sendSystemCommand).toHaveBeenLastCalledWith("account-model", "/model-follow");
+    fireEvent.click(await screen.findByRole("button", { name: "deepseek-v4-pro (Recommended)" }));
+    fireEvent.click(await screen.findByRole("option", { name: /^fast\b/i }));
+
+    catalog = modelSettings("deepseek-v4-pro", "deepseek");
+    act(() => client._emitRuntimeModelUpdate("deepseek-v4-pro", "default"));
+    expect(await screen.findByLabelText("deepseek-v4-pro (Recommended)")).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /^fast\b/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /manage models/i })).not.toBeInTheDocument();
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith("/api/settings"))).toBe(false);
+  });
+
   it("updates the composer model logo when settings snapshot changes", async () => {
     const client = makeClient();
     const { rerender } = render(

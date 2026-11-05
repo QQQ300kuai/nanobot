@@ -62,12 +62,22 @@ def llm_usage_payload(
     *,
     days: int = 371,
     timezone_name: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     try:
         return get_llm_usage_store().usage_payload(
             days=days,
             timezone_name=timezone_name,
+            user_id=user_id,
         )
     except Exception:
         logger.exception("failed to query LLM usage")
         return empty_usage_payload()
+
+
+def llm_usage_summary_by_user(*, days: int = 30) -> list[dict[str, Any]]:
+    try:
+        return get_llm_usage_store().summary_by_user(days=days)
+    except Exception:
+        logger.exception("failed to query LLM usage by user")
+        return []

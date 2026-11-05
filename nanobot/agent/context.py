@@ -19,6 +19,7 @@ from nanobot.security.workspace_access import WorkspaceScopeResolver
 from nanobot.session.keys import last_channel_from_metadata
 from nanobot.session.manager import Session
 from nanobot.session.summary import SessionSummary
+from nanobot.utils import confined_files
 from nanobot.utils.helpers import detect_image_mime, image_placeholder_text, load_bundled_template
 from nanobot.utils.prompt_templates import render_template
 
@@ -184,10 +185,15 @@ class ContextBuilder:
             ("USER.md", self.workspace),
         ]
 
+        # An account workspace (and any project under it) never follows a link out of it.
+        confine = self.memory.confine_root
         for filename, root in sources:
             file_path = root / filename
             if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
+                try:
+                    content = confined_files.read_text(file_path, root=confine)
+                except confined_files.PathEscapeError:
+                    continue
                 if filename == "SOUL.md" and self._is_template_content(
                     content,
                     "legacy/SOUL.md",

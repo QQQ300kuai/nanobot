@@ -10,7 +10,7 @@ import {
 } from "@/components/icons/product-icons";
 import { useContext, useRef, useState } from "react";
 import { HostNavigationContext, HostSwitcher } from "@/components/remote/HostSwitcher";
-import { Bell, Check, ChevronDown, ChevronLeft, LogOut, Loader2, type LucideIcon } from "lucide-react";
+import { Bell, Check, ChevronDown, ChevronLeft, LogOut, Loader2, UserRound, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -27,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useAccount } from "@/providers/AccountProvider";
 import { cn } from "@/lib/utils";
 
 const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fallback: string }> = [
@@ -39,6 +40,13 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "advanced", icon: AdvancedIcon, fallback: "Advanced" },
   { key: "about", icon: AboutIcon, fallback: "About" },
 ];
+
+const ACCOUNT_NAV_ITEM = { key: "account" as const, icon: UserRound, fallback: "Account" };
+
+/** The Account section exists only when the gateway runs with per-account logins. */
+function settingsNavItems(multiUser: boolean): typeof SETTINGS_NAV_ITEMS {
+  return multiUser ? [...SETTINGS_NAV_ITEMS, ACCOUNT_NAV_ITEM] : SETTINGS_NAV_ITEMS;
+}
 
 export function standaloneSectionTitle(section: SettingsSectionKey): string {
   if (section === "apps") return "Apps";
@@ -80,8 +88,9 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
     : t("app.system.restartAction");
   const navSection = isCapabilitySection(activeSection) ? "capabilities" : activeSection;
   const activeNavItemRef = useRef<HTMLButtonElement>(null);
-  const activeItem = SETTINGS_NAV_ITEMS.find((item) => item.key === navSection)
-    ?? SETTINGS_NAV_ITEMS[0];
+  const navItems = settingsNavItems(useAccount() !== null);
+  const activeItem = navItems.find((item) => item.key === navSection)
+    ?? navItems[0];
   const activeLabel = t(`settings.nav.${activeItem.key}`, {
     defaultValue: activeItem.fallback,
   });
@@ -120,7 +129,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           scope="settings"
           className="relative hidden space-y-1 lg:block"
         >
-          {SETTINGS_NAV_ITEMS.map(({ key, icon: Icon, fallback }) => {
+          {navItems.map(({ key, icon: Icon, fallback }) => {
             const active = key === navSection;
             return (
               <button
@@ -206,6 +215,7 @@ function MobileSettingsNavigation({
   restartLabel: string;
 }) {
   const { t } = useTranslation();
+  const navItems = settingsNavItems(useAccount() !== null);
   const hostNavigation = useContext(HostNavigationContext);
   const [open, setOpen] = useState(false);
   const restart = () => { setOpen(false); onRestart?.(); };
@@ -249,7 +259,7 @@ function MobileSettingsNavigation({
             aria-label={t("settings.sidebar.ariaLabel")} aria-labelledby={undefined}
             className="w-60 max-w-[calc(100vw-1.5rem)] data-[state=open]:slide-in-from-top-1 data-[state=closed]:slide-out-to-top-1 data-[state=open]:duration-150 data-[state=closed]:duration-100 motion-reduce:data-[state=open]:animate-none motion-reduce:data-[state=closed]:animate-none"
           >
-            {SETTINGS_NAV_ITEMS.map(({ key, icon: Icon, fallback }) => {
+            {navItems.map(({ key, icon: Icon, fallback }) => {
               const active = key === navSection;
               return (
                 <DropdownMenuItem key={key}

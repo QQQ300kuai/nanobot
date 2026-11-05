@@ -306,6 +306,7 @@ class BaseChannel(ABC):
         authorization_id: str | None = None,
         require_existing_session: bool = False,
         session_generation: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         """Handle a message after checking its authorization subject.
 
@@ -366,6 +367,7 @@ class BaseChannel(ABC):
             session_key_override=session_key,
             session_generation=session_generation,
             require_existing_session=require_existing_session,
+            user_id=user_id,
         )
 
         await self.bus.publish_inbound(msg)

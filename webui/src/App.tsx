@@ -64,11 +64,11 @@ import { ThemeProvider, useTheme } from "@/hooks/useTheme";
 import { useReadingTypography } from "@/hooks/useReadingTypography";
 import { logoFallbackUrls } from "@/lib/provider-brand";
 import { cn } from "@/lib/utils";
+import { resolveBootConnection } from "@/lib/boot-connection";
 import {
   BootstrapAuthRequiredError,
   clearSavedSecret,
   consumeUrlBootstrapSecret,
-  deriveWsUrl,
   fetchBootstrap,
   loadSavedSecret,
   saveSecret,
@@ -80,6 +80,15 @@ import { BrowserNotifications, useBrowserNotificationLifecycle } from "@/compone
 import { ThreadMessageCache } from "@/lib/thread-message-cache";
 import { FilePreviewStore } from "@/hooks/useFilePreviewState";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
+import { AccountProvider, useAccount } from "@/providers/AccountProvider";
+import { AccountLogin } from "@/components/AccountLogin";
+import { AccountSettingsView } from "@/components/account/AccountSettingsView";
+import {
+  AccountApiError,
+  clearAccountToken,
+  loadAccountToken,
+  saveAccountToken,
+} from "@/lib/account-api";
 import { useVersionCheck } from "@/providers/VersionCheckProvider";
 import { useUpdateFlow } from "@/providers/UpdateFlowProvider";
 import type {
@@ -116,6 +125,7 @@ type BootState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "auth"; failed?: boolean }
+  | { status: "login"; expired?: boolean }
   | {
       status: "ready";
       client: NanobotClient;
@@ -125,7 +135,12 @@ type BootState =
       ingressLimits: BootstrapResponse["limits"] | null;
       runtimeSurface: RuntimeSurface;
       webuiCapabilities: string[];
+      account?: { userId: string; isAdmin: boolean };
     };
+
+function bootAccount(boot: BootstrapResponse): { userId: string; isAdmin: boolean } | undefined {
+  return boot.multi_user ? { userId: boot.user_id ?? "", isAdmin: boot.is_admin === true } : undefined;
+}
 
 function bootstrapCapabilities(boot: BootstrapResponse): string[] {
   const capabilities = boot.terminal?.webui?.capabilities;
@@ -582,6 +597,7 @@ function normalizeWorkspaceScope(scope: WorkspaceScopePayload): WorkspaceScopePa
 
 function isBootstrapAuthRequired(error: unknown): boolean {
   if (error instanceof BootstrapAuthRequiredError) return true;
+  if (error instanceof AccountApiError) return error.status === 401 || error.status === 403;
   const msg = error instanceof Error ? error.message : String(error);
   return msg.includes("HTTP 401") || msg.includes("HTTP 403");
 }
@@ -954,11 +970,24 @@ export default function App() {
   const { t } = useTranslation();
   const [state, setState] = useState<BootState>({ status: "loading" });
   const bootstrapSecretRef = useRef("");
+  const accountTokenRef = useRef(loadAccountToken());
+
+  const expireAccountSession = useCallback((client?: NanobotClient) => {
+    client?.close();
+    clearAccountToken();
+    accountTokenRef.current = "";
+    clearReloadCache();
+    clearStoredComposerDrafts();
+    webuiThreadCache.clear();
+    setState({ status: "login", expired: true });
+  }, []);
 
   const refreshReadyClient = useCallback(
     async (client: NanobotClient, fallbackSurface: RuntimeSurface) => {
-      const boot = await fetchBootstrap("", bootstrapSecretRef.current);
-      const url = deriveWsUrl(boot.ws_path, boot.token, boot.ws_url);
+      const boot = accountTokenRef.current
+        ? await fetchBootstrap("", bootstrapSecretRef.current, undefined, accountTokenRef.current)
+        : await fetchBootstrap("", bootstrapSecretRef.current);
+      const { url, apiToken } = await resolveBootConnection(boot, accountTokenRef.current);
       const runtimeSurface = resolveRuntimeSurface(boot.runtime_surface, fallbackSurface);
       const runtimeHost = createRuntimeHost(runtimeSurface, boot.runtime_capabilities);
       const tokenExpiresAt = boot.expires_in
@@ -974,7 +1003,7 @@ export default function App() {
         current.status === "ready" && current.client === client
           ? {
               ...current,
-              token: boot.api_token ?? "",
+              token: apiToken,
               tokenExpiresAt,
               modelName: boot.model_name ?? current.modelName,
               ingressLimits: boot.limits ?? current.ingressLimits,
@@ -983,7 +1012,7 @@ export default function App() {
             }
           : current,
       );
-      return { token: boot.api_token ?? "", url };
+      return { token: apiToken, url };
     },
     [],
   );
@@ -995,10 +1024,13 @@ export default function App() {
       (async () => {
         setState({ status: "loading" });
         try {
-          const boot = await fetchBootstrap("", secret);
+          const boot = accountTokenRef.current
+            ? await fetchBootstrap("", secret, undefined, accountTokenRef.current)
+            : await fetchBootstrap("", secret);
           if (cancelled) return;
           if (secret) saveSecret(secret);
-          const url = deriveWsUrl(boot.ws_path, boot.token, boot.ws_url);
+          const { url, apiToken } = await resolveBootConnection(boot, accountTokenRef.current);
+          if (cancelled) return;
           activateReloadCache(url);
           const runtimeSurface = resolveRuntimeSurface(boot.runtime_surface, "browser");
           const runtimeHost = createRuntimeHost(runtimeSurface, boot.runtime_capabilities);
@@ -1010,7 +1042,10 @@ export default function App() {
               try {
                 const refreshed = await refreshReadyClient(client, runtimeSurface);
                 return refreshed.url;
-              } catch {
+              } catch (e) {
+                if (accountTokenRef.current && isBootstrapAuthRequired(e)) {
+                  expireAccountSession(client);
+                }
                 return null;
               }
             },
@@ -1020,7 +1055,8 @@ export default function App() {
           setState({
             status: "ready",
             client,
-            token: boot.api_token ?? "",
+            token: apiToken,
+            account: bootAccount(boot),
             tokenExpiresAt: boot.expires_in
               ? bootstrapTokenExpiresAt(boot.expires_in)
               : null,
@@ -1031,7 +1067,15 @@ export default function App() {
           });
         } catch (e) {
           if (cancelled) return;
-          if (isBootstrapAuthRequired(e)) {
+          if (
+            (e instanceof BootstrapAuthRequiredError && e.accountLogin)
+            || (accountTokenRef.current && e instanceof AccountApiError)
+          ) {
+            const hadToken = !!accountTokenRef.current;
+            clearAccountToken();
+            accountTokenRef.current = "";
+            setState({ status: "login", expired: hadToken });
+          } else if (isBootstrapAuthRequired(e)) {
             clearReloadCache();
             clearStoredComposerDrafts();
             webuiThreadCache.clear();
@@ -1048,7 +1092,7 @@ export default function App() {
         cancelled = true;
       };
     },
-    [refreshReadyClient],
+    [expireAccountSession, refreshReadyClient],
   );
 
   useEffect(() => {
@@ -1085,6 +1129,18 @@ export default function App() {
       />
     );
   }
+  if (state.status === "login") {
+    return (
+      <AccountLogin
+        expired={!!state.expired}
+        onToken={(token) => {
+          saveAccountToken(token);
+          accountTokenRef.current = token;
+          bootstrapWithSecret("");
+        }}
+      />
+    );
+  }
   if (state.status === "error") {
     return (
       <div className="flex h-full w-full items-center justify-center px-4 text-center">
@@ -1113,7 +1169,19 @@ export default function App() {
     clearReloadCache();
     clearStoredComposerDrafts();
     webuiThreadCache.clear();
+    if (state.status === "ready" && state.account) {
+      clearAccountToken();
+      accountTokenRef.current = "";
+      setState({ status: "login" });
+      return;
+    }
     setState({ status: "auth" });
+  };
+
+  const handleReplaceAccountToken = (token: string) => {
+    saveAccountToken(token);
+    accountTokenRef.current = token;
+    setState((current) => (current.status === "ready" ? { ...current, token } : current));
   };
 
   const handleNativeEngineRestart = async (): Promise<string> => {
@@ -1148,15 +1216,19 @@ export default function App() {
       modelName={state.modelName}
       ingressLimits={state.ingressLimits}
       webuiCapabilities={state.webuiCapabilities}
-      allowUpdateFlow={state.runtimeSurface !== "native"}
+      allowUpdateFlow={state.runtimeSurface !== "native" && (!state.account || state.account.isAdmin)}
     >
-      <BrowserNotifications client={state.client} />
-      <RemoteInstances><Shell
-        runtimeSurface={state.runtimeSurface}
-        onModelNameChange={handleModelNameChange}
-        onLogout={handleLogout}
-        onNativeEngineRestart={handleNativeEngineRestart}
-      /></RemoteInstances>
+      <AccountProvider
+        value={state.account ? { ...state.account, replaceToken: handleReplaceAccountToken } : null}
+      >
+        <BrowserNotifications client={state.client} />
+        <RemoteInstances><Shell
+          runtimeSurface={state.runtimeSurface}
+          onModelNameChange={handleModelNameChange}
+          onLogout={handleLogout}
+          onNativeEngineRestart={handleNativeEngineRestart}
+        /></RemoteInstances>
+      </AccountProvider>
     </ClientProvider>
   );
 }
@@ -1173,6 +1245,8 @@ function Shell({
   onNativeEngineRestart: () => Promise<string>;
 }) {
   const { t, i18n } = useTranslation();
+  const account = useAccount();
+  const accountOnly = account !== null && !account.isAdmin;
   const remoteConnections = useRemoteConnections();
   const versionCheck = useVersionCheck();
   const updateFlow = useUpdateFlow();
@@ -2827,7 +2901,8 @@ function Shell({
     onNewChatInProject,
     onOpenSettings,
     onOpenUpdates: () => onOpenSettings("about"),
-    availableUpdate: localActive && !isNativeRuntime(effectiveRuntimeSurface)
+    hideUtilities: accountOnly,
+    availableUpdate: localActive && !accountOnly && !isNativeRuntime(effectiveRuntimeSurface)
       && versionCheck.result?.type === "update" && versionCheck.result.latestVersion !== versionCheck.dismissedVersion
       ? { version: versionCheck.result.latestVersion, onDismiss: versionCheck.dismiss, onRequestUpdate: updateFlow.open,
         installationMethod: updateFlow.pending ? null : versionCheck.installationMethod }
@@ -3074,7 +3149,7 @@ function Shell({
                             onWorkspaceScopeChange={applyWorkspaceScope}
                             settingsSnapshot={settingsSnapshot}
                             settingsLoading={settingsLoading}
-                            onOpenModelSettings={onOpenModelSettings}
+                            onOpenModelSettings={accountOnly ? undefined : onOpenModelSettings}
                             skills={skills}
                           />
                         );
@@ -3139,7 +3214,7 @@ function Shell({
                           }}
                           settingsSnapshot={settingsSnapshot}
                           settingsLoading={settingsLoading}
-                          onOpenModelSettings={onOpenModelSettings}
+                          onOpenModelSettings={accountOnly ? undefined : onOpenModelSettings}
                           skills={skills}
                         />
                       );
@@ -3154,7 +3229,8 @@ function Shell({
                   mainNavigationExpanded={showMainSidebar && hostSidebarOpen}
                   hostChromeInset={showHostChrome}
                   onBackToChat={onBackToChat}
-                /> : <Suspense fallback={<StartupShell embedded surface={view} sidebarExpanded={hostSidebarOpen} />}>
+                /> : accountOnly ? <AccountSettingsView onBackToChat={onBackToChat} onLogout={onLogout} />
+                : <Suspense fallback={<StartupShell embedded surface={view} sidebarExpanded={hostSidebarOpen} />}>
                   <SettingsView
                     registerExitGuard={registerSettingsExitGuard}
                     themePreference={themePreference}

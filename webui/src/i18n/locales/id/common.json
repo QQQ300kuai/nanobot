@@ -395,7 +395,37 @@
     "account": {
       "section": "Akun",
       "logoutHint": "Putuskan koneksi browser ini dari gateway.",
-      "logout": "Keluar"
+      "logout": "Keluar",
+      "loginTitle": "Masuk ke nanobot",
+      "userId": "ID pengguna",
+      "password": "Kata sandi",
+      "signIn": "Masuk",
+      "loginRequired": "Masukkan ID pengguna dan kata sandi",
+      "invalidCredentials": "ID pengguna atau kata sandi salah",
+      "tooManyRequests": "Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi.",
+      "sessionExpired": "Sesi Anda berakhir. Masuk lagi.",
+      "changePassword": "Ubah kata sandi",
+      "changePasswordHint": "Anda tetap masuk di perangkat ini.",
+      "currentPassword": "Kata sandi saat ini",
+      "newPassword": "Kata sandi baru",
+      "passwordRequired": "Masukkan kata sandi saat ini dan yang baru",
+      "cancel": "Batal",
+      "save": "Simpan",
+      "usage": {
+        "title": "Penggunaan 30 hari terakhir",
+        "tokens": "Token",
+        "requests": "Permintaan",
+        "failed": "Permintaan gagal",
+        "perUser": "Penggunaan per pengguna",
+        "unowned": "Tidak ditetapkan",
+        "userSummary": "{{tokens}} token, {{requests}} permintaan"
+      },
+      "mcp": {
+        "title": "Server MCP",
+        "empty": "Tidak ada server MCP yang tersedia untuk akun Anda.",
+        "secretSaved": "Tersimpan. Biarkan kosong untuk mempertahankannya.",
+        "replaceHint": "Kolom yang diisi menggantikan nilai tersimpan. Kolom yang dikosongkan dihapus."
+      }
     },
     "system": {
       "section": "Sistem",
@@ -570,6 +600,7 @@
       "ariaLabel": "Bagian pengaturan"
     },
     "nav": {
+      "account": "Akun",
       "about": "Tentang",
       "capabilities": "Fitur",
       "general": "Umum",
@@ -1903,6 +1934,7 @@
         "run": "Jalankan perintah Shell",
         "removeContext": "Hapus lampiran dan teks kutipan sebelum menjalankan perintah."
       },
+      "followAdmin": "{{model}} (Direkomendasikan)",
       "chooseAI": "Pilih model",
       "switchModel": "Ganti model",
       "manageModels": "Kelola preset",

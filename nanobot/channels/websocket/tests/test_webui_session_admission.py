@@ -10,7 +10,11 @@ from typing import Any
 import pytest
 
 from nanobot.agent.loop import AgentLoop
-from nanobot.bus.events import InboundMessage
+from nanobot.bus.events import (
+    INBOUND_META_RUNTIME_CONTROL,
+    RUNTIME_CONTROL_SESSION_DISCARD,
+    InboundMessage,
+)
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.manager import ChannelManager
 from nanobot.channels.websocket.runtime import WebSocketChannel
@@ -172,3 +176,21 @@ async def test_temporary_chat_retains_its_own_generation(history, runtime: _Runt
     assert runtime.provider.calls == 1
     assert await runtime.sessions.state.read(first.session_key) is None
     assert await runtime.sessions.state.list_sessions() == []
+
+
+async def test_temporary_chat_discard_reaches_the_owner_account(runtime: _Runtime) -> None:
+    # Multi-user routing drops inbound messages without an account; the discard must carry it.
+    runtime.channel.gateway.endpoint._connection_users[runtime.connection] = "alice"
+    await runtime.channel._dispatch_envelope(
+        runtime.connection, "webui-client", {"type": "new_temporary_chat"},
+    )
+    chat_id = next(event["chat_id"] for event in runtime.connection.sent
+                   if event["event"] == "attached")
+
+    await runtime.channel._dispatch_envelope(
+        runtime.connection, "webui-client", {"type": "discard_temporary_chat", "chat_id": chat_id},
+    )
+
+    control = await runtime.bus.consume_inbound()
+    assert control.metadata[INBOUND_META_RUNTIME_CONTROL] == RUNTIME_CONTROL_SESSION_DISCARD
+    assert control.user_id == "alice"

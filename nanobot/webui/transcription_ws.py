@@ -23,6 +23,7 @@ async def webui_transcription_event(
     envelope: dict[str, Any],
     *,
     config_path: Path | None = None,
+    media_dir: Path | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Return the WS event name and payload for one WebUI transcription request."""
     request_id = envelope.get("request_id")
@@ -45,6 +46,7 @@ async def webui_transcription_event(
             envelope.get("data_url"),
             resolve_transcription_config(load_config(config_path)),
             duration_ms=envelope.get("duration_ms"),
+            media_dir=media_dir,
         )
     except TranscriptionIngressError as exc:
         return error(exc.detail, **exc.extra)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -17,9 +17,16 @@ from nanobot.webui.ingress_policy import DEFAULT_WEBUI_INGRESS_POLICY, WebUIIngr
 from nanobot.webui.media_gateway import WebUIMediaGateway
 from nanobot.webui.session_projection import WebUISessionProjection
 from nanobot.webui.settings_services import WebUISettingsServices
+from nanobot.webui.sidebar_state import WebUISidebarState
 from nanobot.webui.temporary_chats import WebUITemporaryChats
+from nanobot.webui.tenants import (
+    WebUIAccountRuntime,
+    WebUIAccountRuntimes,
+    WebUITenant,
+    WebUITenants,
+)
 from nanobot.webui.transcript import WebUITranscriptRecorder
-from nanobot.webui.workspaces import WebUIWorkspaceController
+from nanobot.webui.workspaces import WebUIWorkspaceController, account_workspace_scope
 from nanobot.webui.ws_http import GatewayHTTPHandler
 
 if TYPE_CHECKING:
@@ -27,6 +34,8 @@ if TYPE_CHECKING:
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.websocket.runtime import WebSocketConfig
     from nanobot.cron.service import CronService
+    from nanobot.multiuser.accounts import AccountStore
+    from nanobot.security.workspace_access import WorkspaceScope
     from nanobot.session.manager import SessionManager
     from nanobot.triggers.local_store import LocalTriggerStore
 
@@ -51,7 +60,9 @@ class GatewayServices:
     local_trigger_store: LocalTriggerStore | None
     cron_pending_job_ids: Callable[[str], set[str]] | None
     local_trigger_pending_ids: Callable[[str], set[str]] | None
+    tenants: WebUITenants
     unified_session: bool = False
+    accounts: AccountStore | None = None
 
 
 def build_gateway_services(
@@ -82,8 +93,14 @@ def build_gateway_services(
     recovery_action: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     subagent_manager: SubagentManager | None = None,
     discard_session: Callable[[str], Awaitable[None]] | None = None,
+    accounts: AccountStore | None = None,
+    admins: Iterable[str] = (),
+    account_runtimes: WebUIAccountRuntimes | None = None,
     logger: Any = default_logger,
 ) -> GatewayServices:
+    if (accounts is None) != (account_runtimes is None):
+        # Multi-user WebUI state must come from the account runtimes, never the shared store.
+        raise ValueError("multi-user WebUI requires both an account store and account runtimes")
     settings = WebUISettingsServices.create(
         config_path or get_config_path(),
         rename_model_preset=(
@@ -103,9 +120,17 @@ def build_gateway_services(
             config.max_message_bytes,
             minimum_frame_bytes,
         )
+    def account_media_roots(user_id: str) -> tuple[Path, WorkspaceScope] | None:
+        # Serving never opens a runtime; the roots of an allowlisted account are fixed paths.
+        if account_runtimes is None or accounts is None or not accounts.is_member(user_id):
+            return None
+        dirs = account_runtimes.dirs(user_id)
+        return dirs.media_dir, account_workspace_scope(user_id, dirs.workspace, dirs.media_dir)
+
     media = WebUIMediaGateway(
         workspace_path=workspace_path,
         logger=logger,
+        account_roots=account_media_roots if account_runtimes is not None else None,
     )
     uploads = AttachmentHTTP(AttachmentStore(
         get_media_dir("websocket"), limits=ingress.attachments,
@@ -123,6 +148,56 @@ def build_gateway_services(
         logger=logger,
     )
     session_projection = WebUISessionProjection(session_manager, subagent_manager=subagent_manager, log=logger)
+    shared_tenant = WebUITenant(
+        user_id=None,
+        session_manager=session_manager,
+        workspaces=workspaces,
+        transcripts=transcripts,
+        temporary_chats=temporary_chats,
+        session_projection=session_projection,
+        sidebar_state=WebUISidebarState(session_manager.state if session_manager is not None else None),
+        media=media,
+    )
+
+    def account_tenant(runtime: WebUIAccountRuntime) -> WebUITenant:
+        account_workspaces = WebUIWorkspaceController(
+            session_manager=runtime.sessions,
+            default_workspace=runtime.workspace,
+            default_restrict_to_workspace=True,
+            account=runtime.user_id,
+            media_dir=runtime.media_dir,
+        )
+        return WebUITenant(
+            user_id=runtime.user_id,
+            session_manager=runtime.sessions,
+            workspaces=account_workspaces,
+            transcripts=WebUITranscriptRecorder(runtime.sessions, log=logger),
+            temporary_chats=WebUITemporaryChats(
+                bus=bus, session_manager=runtime.sessions, workspaces=account_workspaces, logger=logger,
+            ),
+            session_projection=WebUISessionProjection(
+                runtime.sessions, subagent_manager=runtime.subagent_manager, log=logger, account=runtime.user_id,
+            ),
+            sidebar_state=WebUISidebarState(runtime.sessions.state, runtime.state_dir / "sidebar-state.json"),
+            media=WebUIMediaGateway(
+                workspace_path=runtime.workspace,
+                logger=logger,
+                media_dir=lambda channel: runtime.media_dir / channel if channel else runtime.media_dir,
+                secret=media.secret,
+                account=runtime.user_id,
+                source_roots=(runtime.workspace, runtime.media_dir),
+            ),
+            media_dir=runtime.media_dir,
+            subagent_manager=runtime.subagent_manager,
+            discard_session=runtime.discard_session,
+            cron_service=runtime.cron_service,
+        )
+
+    tenants = WebUITenants(
+        shared_tenant,
+        runtimes=account_runtimes,
+        build=account_tenant if account_runtimes is not None else None,
+    )
     http = GatewayHTTPHandler(
         config=config,
         session_manager=session_manager,
@@ -151,9 +226,14 @@ def build_gateway_services(
         recovery_action=recovery_action,
         subagent_manager=subagent_manager,
         discard_session=discard_session,
+        accounts=accounts,
+        tenants=tenants,
+        admins=admins,
         log=logger,
     )
-    endpoint = WebUIGatewayEndpoint(config=config, http=http, tokens=tokens)
+    endpoint = WebUIGatewayEndpoint(
+        config=config, http=http, tokens=tokens, accounts=accounts, admins=admins,
+    )
     return GatewayServices(
         http=http,
         endpoint=endpoint,
@@ -171,5 +251,7 @@ def build_gateway_services(
         local_trigger_store=local_trigger_store,
         cron_pending_job_ids=cron_pending_job_ids,
         local_trigger_pending_ids=local_trigger_pending_ids,
+        tenants=tenants,
         unified_session=unified_session,
+        accounts=accounts,
     )

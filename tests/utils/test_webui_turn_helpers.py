@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -426,3 +427,31 @@ async def test_turn_end_reads_goal_without_loading_conversation_history(
         await sessions.state.aclose()
         monkeypatch.setattr(sessions._store, "_open_connection", open_connection)
     assert sessions.read_session_snapshot(key).messages == messages
+
+
+@pytest.fixture
+def account_turns() -> Generator[None, None, None]:
+    yield
+    wth._ACCOUNT_TURNS.clear()
+
+
+@pytest.mark.asyncio
+async def test_account_turn_tables_do_not_share_a_chat_id(account_turns: None) -> None:
+    bus = MessageBus()
+    bus.publish_outbound = AsyncMock()
+    alice_turn = InboundMessage(
+        channel="websocket", sender_id="u", chat_id="chat", content="hi",
+        metadata={"webui_turn_id": "turn-alice"}, user_id="alice",
+    )
+    await wth.publish_turn_run_status(bus, alice_turn, "running", user_id="alice")
+    alice_owner = alice_turn.metadata[WEBSOCKET_TURN_OWNER_METADATA_KEY]
+
+    # Another account's runtime reusing the chat id sees, registers and clears only its own turn.
+    assert wth.websocket_turn_wall_started_at("chat", user_id="bob") is None
+    assert wth.register_queued_websocket_turn_if_idle("chat", "turn-bob", user_id="bob") is not None
+    assert wth.clear_websocket_turn_if_current("chat", alice_owner, user_id="bob") is False
+    wth.clear_websocket_turns("chat", user_id="bob")
+
+    assert wth.websocket_turn_id("chat", user_id="alice") == "turn-alice"
+    assert wth.websocket_turn_wall_started_at("chat") is None
+    assert wth.clear_websocket_turn_if_current("chat", alice_owner, user_id="alice") is True

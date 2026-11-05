@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 from loguru import logger
 
+from nanobot.utils import confined_files
 from nanobot.utils.atomic_file import atomic_write_lines as atomic_write_lines
 from nanobot.utils.atomic_file import atomic_write_text as atomic_write_text
 from nanobot.utils.file_io import ensure_dir as ensure_dir
@@ -884,14 +885,18 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         return []
 
     added: list[str] = []
+    # An account workspace: a planted (even dangling) link is not a user file to keep, nor a target.
+    confine = confined_files.confinement_root(workspace)
 
     def _write(src: Any, dest: Path) -> None:
         content = src.read_text(encoding="utf-8") if src else ""
-        if dest.exists():
+        if dest.exists() or (confine is not None and dest.is_symlink()):
             return
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
-        added.append(str(dest.relative_to(workspace)))
+        if confine is None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        with suppress(confined_files.PathEscapeError):
+            confined_files.write_text(dest, content, root=confine)
+            added.append(str(dest.relative_to(workspace)))
 
     for item in tpl.iterdir():
         if item.name.endswith(".md") and not item.name.startswith("."):

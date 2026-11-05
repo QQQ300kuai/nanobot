@@ -50,6 +50,16 @@ def _classic_dependency(name: str) -> Any:
     return __getattr__(name)
 
 
+def _refuse_multi_user(runtime_config: Config, entry: str) -> None:
+    from nanobot.multiuser.guard import MultiUserStartupError, refuse_multi_user_entry
+
+    try:
+        refuse_multi_user_entry(runtime_config.multi_user, entry)
+    except MultiUserStartupError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1) from exc
+
+
 def agent(
     message: str | None = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
     session_id: str | None = typer.Option(None, "--session", "-s", help="Session ID"),
@@ -79,6 +89,7 @@ def agent(
 ):
     """Chat in the terminal or send one message non-interactively."""
     runtime_config = _load_runtime_config(config, workspace)
+    _refuse_multi_user(runtime_config, "nanobot agent")
     theme = theme.strip().lower()
     if theme not in {"auto", "dark", "light"}:
         raise typer.BadParameter("must be auto, dark, or light", param_hint="--theme")

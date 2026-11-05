@@ -47,8 +47,10 @@ from nanobot.utils.restart import (
 if TYPE_CHECKING:
     from nanobot.agent.subagent import SubagentManager
     from nanobot.cron.service import CronService
+    from nanobot.multiuser.accounts import AccountStore
     from nanobot.session.manager import SessionManager
     from nanobot.triggers.local_store import LocalTriggerStore
+    from nanobot.webui.tenants import WebUIAccountRuntimes
 
 
 def _default_webui_dist() -> Path | None:
@@ -117,6 +119,8 @@ class ChannelManager:
         ) = None,
         webui_subagent_manager: SubagentManager | None = None,
         webui_discard_session: Callable[[str], Awaitable[None]] | None = None,
+        accounts: AccountStore | None = None,
+        webui_account_runtimes: WebUIAccountRuntimes | None = None,
         config_path: Path | None = None,
     ):
         if config_path is None:
@@ -143,6 +147,8 @@ class ChannelManager:
         self._webui_recovery_action = webui_recovery_action
         self._webui_subagent_manager = webui_subagent_manager
         self._webui_discard_session = webui_discard_session
+        self._accounts = accounts
+        self._webui_account_runtimes = webui_account_runtimes
         self.channels: dict[str, BaseChannel] = {}
         self._channel_owners: dict[str, str] = {}
         self._channel_runtime_specs: dict[str, tuple[str, str]] = {}
@@ -177,6 +183,8 @@ class ChannelManager:
         default_enabled: bool | None = None,
     ) -> Any:
         config = config or self.config
+        if config.multi_user.enabled and name != "websocket":
+            return None
         section = getattr(config.channels, name, None)
         if default_enabled is None:
             default_enabled = channel_default_enabled(name)
@@ -234,6 +242,9 @@ class ChannelManager:
                 recovery_action=self._webui_recovery_action,
                 subagent_manager=self._webui_subagent_manager,
                 discard_session=self._webui_discard_session,
+                accounts=self._accounts,
+                admins=self.config.multi_user.admins,
+                account_runtimes=self._webui_account_runtimes,
                 logger=logger,
             )
             kwargs["gateway"] = gateway
@@ -268,6 +279,7 @@ class ChannelManager:
         from nanobot.optional_features import ensure_enabled_channel_dependencies
 
         plugins = discover_plugins()
+        self._log_ignored_multi_user_channels(plugins)
         default_sections: dict[str, Any] = {}
         activations: dict[str, tuple[Any, list[tuple[str, Any]]]] = {}
         enabled_names: set[str] = set()
@@ -339,6 +351,24 @@ class ChannelManager:
                 logger.warning("{} channel not available: {}", name, exc)
 
         self._validate_allow_from()
+
+    def _log_ignored_multi_user_channels(self, plugins: Mapping[str, Any]) -> None:
+        """Multi-user mode serves accounts over WebSocket only; say which configured channels are skipped."""
+        if not self.config.multi_user.enabled:
+            return
+        ignored = []
+        for name in plugins:
+            if name == "websocket":
+                continue
+            section = getattr(self.config.channels, name, None)
+            enabled = section.get("enabled") if isinstance(section, dict) else getattr(section, "enabled", False)
+            if enabled:
+                ignored.append(name)
+        if ignored:
+            logger.warning(
+                "Multi-user mode serves accounts over the websocket channel only; ignoring configured channels: {}",
+                ", ".join(sorted(ignored)),
+            )
 
     def _mark_channel_error(self, owner: str, message: str) -> None:
         self._mark_runtime_error(

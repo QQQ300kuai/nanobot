@@ -81,6 +81,7 @@ class ImageGenerationTool(Tool):
             config=ctx.config.image_generation,
             provider_configs=image_gen_provider_configs(ctx.providers_config),
             network=ctx.network,
+            media_dir=ctx.media_dir,
         )
 
     def __init__(
@@ -91,8 +92,11 @@ class ImageGenerationTool(Tool):
         provider_config: ProviderConfig | None = None,
         provider_configs: dict[str, ProviderConfig] | None = None,
         network: NetworkConfig | None = None,
+        media_dir: Path | None = None,
     ) -> None:
         self.workspace = Path(workspace).expanduser()
+        # Artifact and reference-image root: a multi-user account's own media directory.
+        self.media_dir = media_dir
         self.config = config
         self.network = network or NetworkConfig()
         self.provider_configs = dict(provider_configs or {})
@@ -140,7 +144,9 @@ class ImageGenerationTool(Tool):
                 value,
                 workspace=workspace,
                 allowed_root=access.allowed_root,
-                extra_allowed_roots=[get_media_dir()] if access.allowed_root is not None else None,
+                extra_allowed_roots=(
+                    [self.media_dir or get_media_dir()] if access.allowed_root is not None else None
+                ),
                 strict=True,
             )
         except WorkspaceBoundaryError as exc:
@@ -200,6 +206,7 @@ class ImageGenerationTool(Tool):
                         source_images=refs,
                         save_dir=self.config.save_dir,
                         provider=self.config.provider,
+                        media_root=self.media_dir,
                     )
                     artifacts.append(artifact)
                     if len(artifacts) >= requested:

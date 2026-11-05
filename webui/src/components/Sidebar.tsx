@@ -76,6 +76,8 @@ interface SidebarProps {
   onOpenSkills: () => void;
   onOpenAutomations: () => void;
   onOpenChannels: () => void;
+  /** Multi-user accounts without admin rights only get chat, so the admin tools are not offered. */
+  hideUtilities?: boolean;
   onSettingsIntent?: () => void;
   onOpenSearch: () => void;
   activeUtility?: "apps" | "skills" | "automations" | "channels" | null;
@@ -216,6 +218,7 @@ export function Sidebar(props: SidebarProps) {
         )}
       >
         {collapsed && <>{newChatButton}{searchButton}</>}
+        {!props.hideUtilities && <>
         <SidebarActionButton
           collapsed={collapsed}
           label={t("sidebar.apps")}
@@ -260,6 +263,7 @@ export function Sidebar(props: SidebarProps) {
           selectionRef={activeActionRef}
           icon={<ChannelsIcon className="h-4 w-4" />}
         />
+        </>}
         {props.archivedCount ? (
           <SidebarActionButton
             collapsed={collapsed}

@@ -72,8 +72,10 @@ class MessageTool(Tool):
         default_message_id: str | None = None,
         workspace: str | Path | None = None,
         restrict_to_workspace: bool = False,
+        media_dir: Path | None = None,
     ):
         self._send_callback = send_callback
+        self._media_dir = media_dir
         self._workspace = (
             Path(workspace).expanduser() if workspace is not None else get_workspace_path()
         )
@@ -94,6 +96,7 @@ class MessageTool(Tool):
             send_callback=send_callback,
             workspace=ctx.workspace,
             restrict_to_workspace=ctx.config.restrict_to_workspace,
+            media_dir=ctx.media_dir,
         )
 
     def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
@@ -135,7 +138,9 @@ class MessageTool(Tool):
                 path = Path(p).expanduser()
                 resolved.append(p if path.is_absolute() else str(workspace / path))
             else:
-                resolved.append(str(resolve_workspace_path(p, workspace, access.allowed_root)))
+                resolved.append(str(resolve_workspace_path(
+                    p, workspace, access.allowed_root, media_dir=self._media_dir,
+                )))
         return resolved
 
     async def execute(

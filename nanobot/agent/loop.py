@@ -124,6 +124,7 @@ if TYPE_CHECKING:
         ToolsConfig,
     )
     from nanobot.cron.service import CronService
+    from nanobot.multiuser.config import MultiUserConfig
     from nanobot.triggers.local_store import LocalTriggerStore
 
 _T = TypeVar("_T")
@@ -311,6 +312,8 @@ class AgentLoop:
         idle_compact_check_interval_seconds: int = 0,
         recovery_admission: RecoveryAdmission | None = None,
         builtin_assembly: Callable[[SessionManager, MessageBus, ToolRegistry, CommandRouter], ExecutionPolicy] | None = None,
+        multi_user: MultiUserConfig | None = None,
+        media_dir: Path | None = None,
     ):
         from nanobot.config.schema import ToolsConfig
 
@@ -367,9 +370,13 @@ class AgentLoop:
         self.cron_service = cron_service
         self.local_trigger_store = local_trigger_store
         self.restrict_to_workspace = restrict_to_workspace
+        # An account's turns always run in its own workspace: never trust message-supplied scopes.
+        self.multi_user = multi_user if multi_user is not None and multi_user.enabled else None
+        self.media_dir = media_dir
         self.workspace_scopes = WorkspaceScopeResolver(
             default_workspace=workspace,
             default_restrict_to_workspace=restrict_to_workspace,
+            scoped_channel=None if self.multi_user is not None else "websocket",
         )
         self._start_time = time.time()
         self._extra_hooks: list[AgentHook] = hooks or []
@@ -409,6 +416,8 @@ class AgentLoop:
             max_concurrent_subagents=max_concurrent_subagents,
             consolidator=self.consolidator,
             session_manager=self.sessions,
+            multi_user=self.multi_user,
+            media_dir=media_dir,
         )
         self._unified_session = unified_session
         self._running = False
@@ -425,6 +434,8 @@ class AgentLoop:
         # observes the queue empty and removes it.
         self._pending_queues: dict[str, asyncio.Queue[InboundMessage]] = {}
         self._preserve_inflight_turns_on_shutdown = False
+        # A dequeued message is invisible to the queues below until dispatch registers it.
+        self._dispatching = 0
         self._deferred_automation_turns: dict[str, list[InboundMessage]] = {}
         self._cron_turns = CronTurnCoordinator(
             enqueue=self._enqueue_session_message,
@@ -588,9 +599,14 @@ class AgentLoop:
     async def set_session_model_preset(
         self,
         session_key: str,
-        name: str,
+        name: str | None,
     ) -> LLMRuntime:
         """Validate and persist one session's preset selection without blocking."""
+        if name is None:
+            await self.sessions.state.update_metadata(
+                session_key, {}, remove=(SESSION_MODEL_PRESET_METADATA_KEY,), create_if_missing=True,
+            )
+            return self.llm_runtime()
         runtime = self.runtime_resolver.resolve_preset(name)
         await self.sessions.state.update_metadata(
             session_key,
@@ -665,6 +681,8 @@ class AgentLoop:
             timezone=self.context.timezone or "UTC",
             workspace_sandbox=self.workspace_scopes.sandbox_status,
             runtime_control=runtime_control,
+            multi_user=self.multi_user,
+            media_dir=self.media_dir,
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
@@ -1441,6 +1459,7 @@ class AgentLoop:
                     continue
 
                 with self.bus.admission.activity():
+                    self._dispatching += 1
                     try:
                         await self._dispatch_inbound(msg)
                     except (SessionOperationQueueFullError, SessionConflictError, ExecutionControlError) as exc:
@@ -1449,6 +1468,8 @@ class AgentLoop:
                         if msg.is_user_input:
                             delivery = self.turn_delivery_factory.unrouted(msg, key)
                             await delivery.fail(publish_completion=key not in self._pending_queues)
+                    finally:
+                        self._dispatching -= 1
         finally:
             await self.aclose()
 
@@ -1504,11 +1525,13 @@ class AgentLoop:
         This does not stop other processes or channel/configuration writes;
         those must be shut down before an updater takes a data backup.
         """
-        return self.bus.admission.pause_if_idle(self._has_pending_work)
+        return self.bus.admission.pause_if_idle(self.has_pending_work)
 
-    def _has_pending_work(self) -> bool:
+    def has_pending_work(self) -> bool:
+        """Whether this runtime holds queued, active or detached work."""
         return bool(
-            self.bus.inbound_size or self._pending_queues or self._deferred_automation_turns
+            self._dispatching or self.bus.inbound_size or self._pending_queues
+            or self._deferred_automation_turns
             or self.bus.has_pending_events or self._active_tasks or self._background_tasks
             or self._close_lock.locked()
             or self.subagents.has_pending_work or self._exec_session_manager.has_pending_work

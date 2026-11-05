@@ -395,7 +395,37 @@
     "account": {
       "section": "Tài khoản",
       "logoutHint": "Ngắt kết nối trình duyệt này với gateway.",
-      "logout": "Đăng xuất"
+      "logout": "Đăng xuất",
+      "loginTitle": "Đăng nhập nanobot",
+      "userId": "ID người dùng",
+      "password": "Mật khẩu",
+      "signIn": "Đăng nhập",
+      "loginRequired": "Nhập ID người dùng và mật khẩu",
+      "invalidCredentials": "ID người dùng hoặc mật khẩu không đúng",
+      "tooManyRequests": "Quá nhiều lần thử. Hãy đợi một lát rồi thử lại.",
+      "sessionExpired": "Phiên đã kết thúc. Hãy đăng nhập lại.",
+      "changePassword": "Đổi mật khẩu",
+      "changePasswordHint": "Bạn vẫn đăng nhập trên thiết bị này.",
+      "currentPassword": "Mật khẩu hiện tại",
+      "newPassword": "Mật khẩu mới",
+      "passwordRequired": "Nhập mật khẩu hiện tại và mật khẩu mới",
+      "cancel": "Hủy",
+      "save": "Lưu",
+      "usage": {
+        "title": "Mức sử dụng 30 ngày qua",
+        "tokens": "Token",
+        "requests": "Yêu cầu",
+        "failed": "Yêu cầu thất bại",
+        "perUser": "Mức sử dụng theo người dùng",
+        "unowned": "Chưa gán",
+        "userSummary": "{{tokens}} token, {{requests}} yêu cầu"
+      },
+      "mcp": {
+        "title": "Máy chủ MCP",
+        "empty": "Tài khoản của bạn chưa có máy chủ MCP nào.",
+        "secretSaved": "Đã lưu. Để trống để giữ nguyên.",
+        "replaceHint": "Các trường đã điền sẽ thay thế giá trị đã lưu. Các trường để trống sẽ bị xóa."
+      }
     },
     "system": {
       "section": "Hệ thống",
@@ -570,6 +600,7 @@
       "ariaLabel": "Mục cài đặt"
     },
     "nav": {
+      "account": "Tài khoản",
       "about": "Giới thiệu",
       "capabilities": "Tính năng",
       "general": "Chung",
@@ -1903,6 +1934,7 @@
         "run": "Chạy lệnh Shell",
         "removeContext": "Xóa tệp đính kèm và văn bản trích dẫn trước khi chạy lệnh."
       },
+      "followAdmin": "{{model}} (Đề xuất)",
       "chooseAI": "Chọn mô hình",
       "switchModel": "Đổi mô hình",
       "manageModels": "Quản lý bộ thiết lập",

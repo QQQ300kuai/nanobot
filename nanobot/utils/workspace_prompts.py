@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import suppress
 from pathlib import Path
 
+from nanobot.utils import confined_files
 from nanobot.utils.helpers import truncate_text
 
 WORKSPACE_PROMPT_MAX_CHARS = 32_000
@@ -11,6 +12,11 @@ WORKSPACE_PROMPT_MAX_CHARS = 32_000
 def workspace_prompt_file(workspace: Path, name: str) -> Path:
     """Return the conventional path for a named workspace prompt override."""
     return workspace / "prompts" / f"{name}.md"
+
+
+def _confine_root(path: Path) -> Path | None:
+    # ``workspace_prompt_file`` layout: <workspace>/prompts/<name>.md.
+    return confined_files.confinement_root(path.parent.parent)
 
 
 def load_workspace_prompt_override(
@@ -24,7 +30,7 @@ def load_workspace_prompt_override(
     empty files return ``(None, 0)`` so callers can fall back to their default.
     """
     with suppress(OSError, UnicodeDecodeError):
-        text = path.read_text(encoding="utf-8").rstrip()
+        text = confined_files.read_text(path, root=_confine_root(path)).rstrip()
         if text:
             original_chars = len(text)
             return truncate_text(text, max_chars), original_chars
@@ -43,14 +49,18 @@ def initialize_workspace_prompt(path: Path, default_prompt: str) -> bool:
     Returns ``False`` without overwriting a non-empty file, non-file path, or
     path whose current state cannot be read safely.
     """
+    root = _confine_root(path)
     try:
         if path.exists() and (
-            not path.is_file() or bool(path.read_text(encoding="utf-8").strip())
+            not path.is_file() or bool(confined_files.read_text(path, root=root).strip())
         ):
             return False
     except (OSError, UnicodeDecodeError):
         return False
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(default_prompt + "\n", encoding="utf-8")
+    try:
+        confined_files.write_text(path, default_prompt + "\n", root=root)
+    except confined_files.PathEscapeError:
+        return False
     return True

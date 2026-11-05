@@ -10,6 +10,7 @@ if TYPE_CHECKING:
         get_llm_usage_store,
         llm_usage_payload,
         llm_usage_store_path,
+        llm_usage_summary_by_user,
         record_llm_call,
     )
     from nanobot.llm_usage.store import LLMUsageStore
@@ -22,6 +23,7 @@ _EXPORTS = {
     "record_llm_call": "nanobot.llm_usage.service",
     "llm_usage_store_path": "nanobot.llm_usage.service",
     "llm_usage_payload": "nanobot.llm_usage.service",
+    "llm_usage_summary_by_user": "nanobot.llm_usage.service",
 }
 
 
@@ -46,4 +48,5 @@ __all__ = [
     "record_llm_call",
     "llm_usage_store_path",
     "llm_usage_payload",
+    "llm_usage_summary_by_user",
 ]

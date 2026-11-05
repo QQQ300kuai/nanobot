@@ -33,6 +33,13 @@ from nanobot.webui.http_utils import (
 
 MediaDirProvider = Callable[[str | None], Path]
 SignedMediaPath = Callable[[Path], dict[str, str] | None]
+# Multi-user mode: the media root and the restricted workspace scope of an account, or ``None``
+# when the account has no open runtime.
+AccountMediaRoots = Callable[[str], "tuple[Path, WorkspaceScope] | None"]
+
+# Leading byte of a signed payload that names its account: SOH for media under the account's
+# media root, NUL (shared with single-user borrowed paths) for a borrowed local attachment.
+_ACCOUNT_MEDIA_PREFIX = "\x01"
 
 
 def b64url_encode(data: bytes) -> str:
@@ -103,21 +110,31 @@ def sign_media_path(
     *,
     secret: bytes,
     media_dir: MediaDirProvider = _default_media_dir,
+    account: str | None = None,
 ) -> str | None:
-    """Return a signed ``/api/media/<sig>/<payload>`` URL for a media-root path."""
+    """Return a signed ``/api/media/<sig>/<payload>`` URL for a media-root path.
+
+    With ``account`` the media root is that account's, and the URL names the account.
+    """
     try:
         media_root = media_dir(None).resolve()
         rel = abs_path.resolve().relative_to(media_root)
     except (OSError, ValueError):
         return None
-    payload = b64url_encode(rel.as_posix().encode("utf-8"))
+    reference = rel.as_posix() if account is None else _ACCOUNT_MEDIA_PREFIX + json.dumps(
+        [account, rel.as_posix()], ensure_ascii=False,
+    )
+    payload = b64url_encode(reference.encode("utf-8"))
     mac = hmac.new(secret, payload.encode("ascii"), hashlib.sha256).digest()[:16]
     return f"/api/media/{b64url_encode(mac)}/{payload}"
 
 
-def sign_local_attachment(path: str, *, session_key: str, secret: bytes) -> str:
-    """Bind a borrowed path to its session; serving rechecks the current scope."""
-    payload = b64url_encode(b"\0" + json.dumps([session_key, path], ensure_ascii=False).encode("utf-8"))
+def sign_local_attachment(
+    path: str, *, session_key: str, secret: bytes, account: str | None = None,
+) -> str:
+    """Bind a borrowed path to its session (and account); serving rechecks the current scope."""
+    reference = [session_key, path] if account is None else [session_key, path, account]
+    payload = b64url_encode(b"\0" + json.dumps(reference, ensure_ascii=False).encode("utf-8"))
     mac = hmac.new(secret, payload.encode("ascii"), hashlib.sha256).digest()[:16]
     return f"/api/media/{b64url_encode(mac)}/{payload}"
 
@@ -128,9 +145,15 @@ def sign_or_stage_media_path(
     secret: bytes,
     media_dir: MediaDirProvider = _default_media_dir,
     logger: Any | None = None,
+    account: str | None = None,
+    source_roots: tuple[Path, ...] | None = None,
 ) -> dict[str, str] | None:
-    """Sign an existing media-root path, or stage an arbitrary file before signing."""
-    signed = sign_media_path(path, secret=secret, media_dir=media_dir)
+    """Sign an existing media-root path, or stage a file before signing.
+
+    ``source_roots`` limits which files may be staged (an account's own directories);
+    ``None`` stages any readable file, as the single-user gateway always has.
+    """
+    signed = sign_media_path(path, secret=secret, media_dir=media_dir, account=account)
     if signed is not None:
         return {"url": signed, "name": path.name}
     staged_tmp: Path | None = None
@@ -138,8 +161,14 @@ def sign_or_stage_media_path(
         resolved = path.resolve(strict=True)
         if not resolved.is_file():
             return None
+        if source_roots is not None and not any(
+            resolved.is_relative_to(root.resolve()) for root in source_roots
+        ):
+            return None
         source_stat = resolved.stat()
         target_dir = media_dir("websocket")
+        # Account media providers return plain paths; the shared one creates its directory.
+        target_dir.mkdir(parents=True, exist_ok=True)
         safe_name = safe_filename(path.name) or "attachment"
         source_version = "\0".join((
             os.path.normcase(str(resolved)),
@@ -160,7 +189,7 @@ def sign_or_stage_media_path(
     finally:
         if staged_tmp is not None:
             staged_tmp.unlink(missing_ok=True)
-    signed = sign_media_path(staged, secret=secret, media_dir=media_dir)
+    signed = sign_media_path(staged, secret=secret, media_dir=media_dir, account=account)
     if signed is None:
         return None
     return {"url": signed, "name": path.name}
@@ -203,8 +232,13 @@ def serve_signed_media(
     request: WsRequest | None = None,
     media_dir: MediaDirProvider = _default_media_dir,
     scope_for_session: Callable[[str], WorkspaceScope | None] | None = None,
+    account_roots: AccountMediaRoots | None = None,
 ) -> Response:
-    """Serve a signed media URL, including browser-friendly byte ranges."""
+    """Serve a signed media URL, including browser-friendly byte ranges.
+
+    ``account_roots`` (multi-user mode) resolves payloads that name an account; such a payload
+    is served only from that account's media root or restricted workspace.
+    """
     try:
         provided_mac = b64url_decode(sig)
     except (ValueError, binascii.Error):
@@ -225,17 +259,47 @@ def serve_signed_media(
             if not isinstance(raw_reference, list) or scope_for_session is None:
                 return _http_error(400, "invalid local attachment")
             reference = cast(list[object], raw_reference)
-            if len(reference) != 2:
+            if len(reference) == 3 and account_roots is not None:
+                _session_key, path, account = reference
+                roots = account_roots(account) if isinstance(account, str) else None
+                if roots is None or not isinstance(path, str):
+                    return _http_error(404, "attachment unavailable")
+                scope = roots[1]
+            elif len(reference) == 2:
+                session_key, path = reference
+                if not isinstance(session_key, str) or not isinstance(path, str):
+                    return _http_error(400, "invalid local attachment")
+                scope = scope_for_session(session_key)
+                if scope is None:
+                    return _http_error(404, "attachment unavailable")
+            else:
                 return _http_error(400, "invalid local attachment")
-            session_key, path = reference
-            if not isinstance(session_key, str) or not isinstance(path, str):
-                return _http_error(400, "invalid local attachment")
-            scope = scope_for_session(session_key)
-            if scope is None:
-                return _http_error(404, "attachment unavailable")
             candidate = resolve_file_path(path, scope=scope, literal=True)
         except (ValueError, WebUIFilePreviewError) as exc:
             return _http_error(getattr(exc, "status", 404), "attachment unavailable")
+    elif rel_str.startswith(_ACCOUNT_MEDIA_PREFIX):
+        try:
+            raw_account_reference: object = json.loads(rel_str[1:])
+        except ValueError:
+            return _http_error(400, "invalid payload")
+        if (
+            account_roots is None
+            or not isinstance(raw_account_reference, list)
+            or len(cast(list[object], raw_account_reference)) != 2
+        ):
+            return _http_error(404, "not found")
+        account, rel = cast(list[object], raw_account_reference)
+        roots = account_roots(account) if isinstance(account, str) and isinstance(rel, str) else None
+        if roots is None:
+            return _http_error(404, "not found")
+        try:
+            media_root = roots[0].resolve()
+            candidate = (media_root / cast(str, rel)).resolve()
+            candidate.relative_to(media_root)
+        except (OSError, ValueError):
+            return _http_error(404, "not found")
+        if not candidate.is_file():
+            return _http_error(404, "not found")
     else:
         try:
             media_root = media_dir(None).resolve()

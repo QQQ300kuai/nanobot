@@ -1,4 +1,5 @@
 import { ChevronLeft } from "lucide-react";
+import { AccountPanel } from "@/components/account/AccountPanel";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogLayoutContext, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -268,6 +269,8 @@ export function SettingsPage({
         );
       case "about":
         return <AboutSettings settings={settings} />;
+      case "account":
+        return <AccountPanel />;
       case "notifications":
         return <NotificationSettings localPrefs={localPrefs} onChangeLocalPrefs={setLocalPrefs} />;
       case "models":

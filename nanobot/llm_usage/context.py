@@ -66,3 +66,29 @@ def llm_usage_source(source: LLMUsageSource) -> Generator[None]:
         yield
     finally:
         reset_llm_usage_source(token)
+
+
+_CURRENT_USER: ContextVar[str | None] = ContextVar("nanobot_llm_usage_user", default=None)
+
+
+def current_llm_usage_user() -> str | None:
+    """The multi-user account owning the current provider call, if any."""
+    return _CURRENT_USER.get()
+
+
+def bind_llm_usage_user(user_id: str | None) -> Token[str | None]:
+    return _CURRENT_USER.set(user_id)
+
+
+def reset_llm_usage_user(token: Token[str | None]) -> None:
+    _CURRENT_USER.reset(token)
+
+
+@contextmanager
+def llm_usage_user(user_id: str | None) -> Generator[None]:
+    """Attribute nested provider calls, and tasks created inside, to one account."""
+    token = bind_llm_usage_user(user_id)
+    try:
+        yield
+    finally:
+        reset_llm_usage_user(token)

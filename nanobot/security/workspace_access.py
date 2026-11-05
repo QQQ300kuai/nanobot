@@ -70,6 +70,11 @@ class WorkspaceScope:
     restrict_to_workspace: bool
     sandbox_status: WorkspaceSandboxStatus
     source_channel: str | None = None
+    # Read-only media root a restricted scope may also read. Never serialized. A single-user
+    # scope leaves it ``None`` for the shared media dir; an account scope (``account`` set) reads
+    # only its own ``media_root`` and never falls back to the shared dir.
+    media_root: Path | None = None
+    account: str | None = None
 
     @property
     def project_name(self) -> str:
@@ -111,7 +116,8 @@ class WorkspaceScopeResolver:
 
     default_workspace: str | Path
     default_restrict_to_workspace: bool
-    scoped_channel: str = "websocket"
+    # Channel whose messages may carry a workspace scope; ``None`` trusts none.
+    scoped_channel: str | None = "websocket"
 
     @property
     def sandbox_status(self) -> WorkspaceSandboxStatus:

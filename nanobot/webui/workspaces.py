@@ -9,6 +9,7 @@ import time
 import weakref
 from collections import OrderedDict
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,7 +25,7 @@ from nanobot.security.workspace_access import (
     default_workspace_scope,
     validate_workspace_scope_payload,
 )
-from nanobot.session.webui_turns import websocket_turn_wall_started_at
+from nanobot.session.webui_turns import websocket_turn_scope, websocket_turn_wall_started_at
 from nanobot.webui.session_identity import webui_session_key
 
 if TYPE_CHECKING:
@@ -157,6 +158,15 @@ def write_webui_default_access_mode(mode: str) -> bool:
     return changed
 
 
+def account_workspace_scope(account: str, workspace: Path, media_dir: Path) -> WorkspaceScope:
+    """The only scope a multi-user account gets: its workspace, restricted, plus its media."""
+    return replace(
+        build_workspace_scope(workspace, "restricted", source_channel=_WEBUI_SCOPE_CHANNEL),
+        media_root=media_dir,
+        account=account,
+    )
+
+
 def default_scope_for_webui(
     default_workspace: Path,
     default_restrict_to_workspace: bool,
@@ -219,10 +229,22 @@ class WebUIWorkspaceController:
         session_manager: SessionManager | None,
         default_workspace: Path,
         default_restrict_to_workspace: bool,
+        account: str | None = None,
+        media_dir: Path | None = None,
     ) -> None:
         self._sessions = session_manager
         self._default_workspace = default_workspace
         self._default_restrict_to_workspace = default_restrict_to_workspace
+        # Multi-user mode: every scope is the account workspace, restricted, built by the server.
+        # Client-supplied scopes and the shared WebUI workspace state are never consulted.
+        self._account = account
+        self._account_scope = (
+            account_workspace_scope(account, default_workspace, media_dir)
+            if account is not None and media_dir is not None else None
+        )
+        if account is not None and self._account_scope is None:
+            raise ValueError("an account workspace controller needs the account media dir")
+        self._turn_scope = websocket_turn_scope(account)
         self._draft_scopes: OrderedDict[str, WorkspaceScope] = OrderedDict()
         self._scope_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
@@ -234,6 +256,8 @@ class WebUIWorkspaceController:
         return lock
 
     def default_scope(self) -> WorkspaceScope:
+        if self._account is not None:
+            return self.restricted_default_scope()
         return default_scope_for_webui(
             self._default_workspace,
             self._default_restrict_to_workspace,
@@ -253,6 +277,8 @@ class WebUIWorkspaceController:
 
     def restricted_default_scope(self) -> WorkspaceScope:
         """Return the default workspace with access restricted for this request."""
+        if self._account_scope is not None:
+            return self._account_scope
         return build_workspace_scope(
             self._default_workspace,
             "restricted",
@@ -265,6 +291,8 @@ class WebUIWorkspaceController:
         *,
         default_scope: WorkspaceScope | None = None,
     ) -> WorkspaceScope:
+        if self._account is not None:
+            return self.default_scope()
         try:
             return validate_workspace_scope_payload(
                 raw_scope,
@@ -404,7 +432,7 @@ class WebUIWorkspaceController:
             current = draft
         else:
             current = self.default_scope()
-        raw = envelope.get(WORKSPACE_SCOPE_METADATA_KEY)
+        raw = envelope.get(WORKSPACE_SCOPE_METADATA_KEY) if self._account is None else None
         if raw is None:
             scope = current
         else:
@@ -499,7 +527,7 @@ class WebUIWorkspaceController:
                 validate_existing=lambda metadata: self._validate_existing_project(metadata, scope),
             )
         self._draft_scopes.pop(session_key, None)
-        remember_webui_project(scope.project_path)
+        self._remember(scope)
         return generation, created
 
     async def rollback_scope_admission(
@@ -520,7 +548,7 @@ class WebUIWorkspaceController:
     async def stage_scope(self, chat_id: str, scope: WorkspaceScope) -> WorkspaceScope:
         """Keep a new chat's scope transient until its first accepted message."""
         async with self._scope_lock(chat_id):
-            if websocket_turn_wall_started_at(chat_id) is not None:
+            if websocket_turn_wall_started_at(chat_id, **self._turn_scope) is not None:
                 raise WorkspaceScopeError("chat_running", status=409)
             session_key = webui_session_key(chat_id)
             if (
@@ -529,12 +557,17 @@ class WebUIWorkspaceController:
             ):
                 await self._persist_scope(session_key, scope)
                 return scope
-            remember_webui_project(scope.project_path)
+            self._remember(scope)
             self._draft_scopes[session_key] = scope
             self._draft_scopes.move_to_end(session_key)
             while len(self._draft_scopes) > _MAX_DRAFT_SCOPES:
                 self._draft_scopes.popitem(last=False)
             return scope
+
+    def _remember(self, scope: WorkspaceScope) -> None:
+        # The recent-projects list is shared WebUI state; account workspaces stay out of it.
+        if self._account is None:
+            remember_webui_project(scope.project_path)
 
     def discard_draft_scope(self, session_key: str) -> bool:
         """Discard the staged scope for a chat that has not persisted yet."""

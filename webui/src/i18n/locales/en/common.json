@@ -395,7 +395,37 @@
     "account": {
       "section": "Account",
       "logoutHint": "Disconnect this browser from the gateway.",
-      "logout": "Sign out"
+      "logout": "Sign out",
+      "loginTitle": "Sign in to nanobot",
+      "userId": "User ID",
+      "password": "Password",
+      "signIn": "Sign in",
+      "loginRequired": "Enter your user ID and password",
+      "invalidCredentials": "Incorrect user ID or password",
+      "tooManyRequests": "Too many attempts. Wait a moment and try again.",
+      "sessionExpired": "Your session ended. Sign in again.",
+      "changePassword": "Change password",
+      "changePasswordHint": "You will stay signed in on this device.",
+      "currentPassword": "Current password",
+      "newPassword": "New password",
+      "passwordRequired": "Enter your current and new password",
+      "cancel": "Cancel",
+      "save": "Save",
+      "usage": {
+        "title": "Usage, last 30 days",
+        "tokens": "Tokens",
+        "requests": "Requests",
+        "failed": "Failed requests",
+        "perUser": "Usage by user",
+        "unowned": "Unassigned",
+        "userSummary": "{{tokens}} tokens, {{requests}} requests"
+      },
+      "mcp": {
+        "title": "MCP servers",
+        "empty": "No MCP servers are available to your account.",
+        "secretSaved": "Saved. Leave empty to keep it.",
+        "replaceHint": "Filled fields replace the saved values. Fields left empty are removed."
+      }
     },
     "system": {
       "section": "System",
@@ -762,6 +792,7 @@
       "ariaLabel": "Settings sections"
     },
     "nav": {
+      "account": "Account",
       "about": "About",
       "capabilities": "Capabilities",
       "general": "General",
@@ -2109,6 +2140,7 @@
         "run": "Run Shell command",
         "removeContext": "Remove attachments and quoted text before running a command."
       },
+      "followAdmin": "{{model}} (Recommended)",
       "chooseAI": "Choose model",
       "switchModel": "Switch model",
       "manageModels": "Manage presets",

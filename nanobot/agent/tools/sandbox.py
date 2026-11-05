@@ -1,14 +1,14 @@
 """Sandbox backends for shell command execution.
 
 To add a backend, match the callable signature of _bwrap and _seatbelt,
-including keyword-only sandbox_ro_binds and sandbox_rw_binds, and register
-it in _BACKENDS below.
+including keyword-only sandbox_ro_binds, sandbox_rw_binds, media_dir and net,
+and register it in _BACKENDS below.
 """
 
 import os
 import shlex
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 from nanobot.config.paths import get_media_dir
 
@@ -52,9 +52,11 @@ def _bwrap(
     *,
     sandbox_ro_binds: Iterable[str] | None = None,
     sandbox_rw_binds: Iterable[str] | None = None,
+    media_dir: Path | None = None,
+    net: Literal["share", "none"] = "share",
 ) -> str:
     ws = Path(workspace).resolve()
-    media = get_media_dir().resolve()
+    media = (media_dir or get_media_dir()).resolve()
 
     try:
         sandbox_cwd = str(ws / Path(cwd).resolve().relative_to(ws))
@@ -75,7 +77,13 @@ def _bwrap(
         "/etc/ld.so.cache",
     ]
 
-    args = ["bwrap", "--new-session", "--die-with-parent", "--setenv", "HOME", str(ws)]
+    args = [
+        "bwrap", "--new-session", "--die-with-parent", "--cap-drop", "ALL",
+        "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+    ]
+    if net == "none":
+        args.append("--unshare-net")
+    args += ["--setenv", "HOME", str(ws)]
     for p in required:
         args += ["--ro-bind", p, p]
     for p in optional:
@@ -182,6 +190,8 @@ def _seatbelt(
     *,
     sandbox_ro_binds: Iterable[str] | None = None,
     sandbox_rw_binds: Iterable[str] | None = None,
+    media_dir: Path | None = None,
+    net: Literal["share", "none"] = "share",
 ) -> str:
     """Wrap command in a macOS Seatbelt sandbox (requires sandbox-exec(1)).
 
@@ -196,11 +206,12 @@ def _seatbelt(
     stays denied.  Unlike ``bwrap``, a denied parent still appears in directory
     listings; only its contents are inaccessible.
 
-    Network access is left unrestricted, matching ``bwrap`` (which does not pass
-    ``--unshare-net``).
+    Network access is left unrestricted, matching ``bwrap`` with the default
+    ``net="share"``. ``net`` is accepted for backend-contract parity and
+    ignored here: Seatbelt does not isolate the network in this backend.
     """
     ws = Path(workspace).resolve()
-    media = get_media_dir().resolve()
+    media = (media_dir or get_media_dir()).resolve()
 
     try:
         sandbox_cwd = str(ws / Path(cwd).resolve().relative_to(ws))
@@ -311,6 +322,8 @@ def wrap_command(
     *,
     sandbox_ro_binds: Iterable[str] | None = None,
     sandbox_rw_binds: Iterable[str] | None = None,
+    media_dir: Path | None = None,
+    net: Literal["share", "none"] = "share",
 ) -> str:
     """Wrap *command* using the named sandbox backend."""
     if backend := _BACKENDS.get(sandbox):
@@ -320,5 +333,7 @@ def wrap_command(
             cwd,
             sandbox_ro_binds=sandbox_ro_binds,
             sandbox_rw_binds=sandbox_rw_binds,
+            media_dir=media_dir,
+            net=net,
         )
     raise ValueError(f"Unknown sandbox backend {sandbox!r}. Available: {list(_BACKENDS)}")

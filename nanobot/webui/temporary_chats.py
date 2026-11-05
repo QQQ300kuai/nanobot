@@ -23,7 +23,7 @@ _TEMPORARY_CHAT_DISABLED_TOOLS = frozenset({
     "subagent",
     "cron",
 })
-_TEMPORARY_CHAT_COMMANDS = frozenset({"/model", "/stop"})
+_TEMPORARY_CHAT_COMMANDS = frozenset({"/model", "/model-follow", "/stop"})
 
 
 class TemporaryChatError(ValueError):
@@ -179,8 +179,11 @@ class WebUITemporaryChats:
         if not chat_ids:
             self._owner_chat_ids.pop(owner, None)
 
-    async def discard(self, owner: object, chat_id: str) -> None:
-        """Forget one owned chat and cancel any active work through the message bus."""
+    async def discard(self, owner: object, chat_id: str, *, user_id: str | None = None) -> None:
+        """Forget one owned chat and cancel any active work through the message bus.
+
+        ``user_id`` is the owner's authenticated account, so multi-user routing reaches its runtime.
+        """
         if (
             not self._cached_session_is_transient(chat_id)
             or self._owners.get(chat_id) is not owner
@@ -202,6 +205,7 @@ class WebUITemporaryChats:
                     INBOUND_META_RUNTIME_CONTROL: RUNTIME_CONTROL_SESSION_DISCARD,
                 },
                 session_key_override=session_key,
+                user_id=user_id,
             )
         )
 

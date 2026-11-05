@@ -565,7 +565,7 @@ class LLMProvider(ABC):
         model_value = kwargs.get("model")
         model = model_value if isinstance(model_value, str) and model_value else self.get_default_model()
         try:
-            from nanobot.llm_usage.context import current_llm_usage_source
+            from nanobot.llm_usage.context import current_llm_usage_source, current_llm_usage_user
             from nanobot.llm_usage.models import LLMCallRecord
 
             observer(LLMCallRecord(
@@ -579,6 +579,7 @@ class LLMProvider(ABC):
                 usage=usage,
                 error_status_code=response.error_status_code,
                 error_kind=response.error_kind,
+                user_id=current_llm_usage_user(),
             ))
         except Exception:
             logger.exception("LLM call observer failed for {}", self.provider_name)

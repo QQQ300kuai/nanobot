@@ -23,6 +23,27 @@ def configured_model_presets(config: Config) -> dict[str, ModelPresetConfig]:
     return {**config.model_presets, "default": config.resolve_default_preset()}
 
 
+def configured_chat_model_presets(config: Config) -> dict[str, ModelPresetConfig]:
+    """Account choices are the administrator's enabled primary and fallback presets."""
+    presets = configured_model_presets(config)
+    primary = config.agents.defaults.model_preset
+    if not primary or primary == "default":
+        return {"default": presets["default"]}
+    names = [primary, *(
+        candidate for candidate in config.agents.defaults.fallback_models
+        if isinstance(candidate, str)
+    )]
+    return {name: presets[name] for name in names}
+
+
+def load_chat_model_preset_catalog(config_path: Path | None = None) -> dict[str, ModelPresetConfig]:
+    from nanobot.config.loader import load_config, resolve_config_env_vars
+
+    return configured_chat_model_presets(
+        resolve_config_env_vars(load_config(config_path), config_path=config_path),
+    )
+
+
 def load_model_preset_catalog(
     config_path: Path | None = None,
 ) -> dict[str, ModelPresetConfig]:

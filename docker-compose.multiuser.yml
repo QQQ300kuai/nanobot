@@ -1,0 +1,25 @@
+# Multi-user mode runs every user's exec commands in bubblewrap. bwrap inside a
+# container needs these relaxations; systempaths=unconfined lets it mount /proc.
+x-multiuser-bwrap-security: &multiuser-bwrap-security
+  cap_add:
+    - SYS_ADMIN
+  security_opt:
+    - apparmor=unconfined
+    - seccomp=unconfined
+    - systempaths=unconfined
+
+# State (config.json, users file, admin catalog file, workspaces/, accounts.db) lives under
+# ~/.nanobot, which docker-compose.yml already mounts at /home/nanobot/.nanobot, so the
+# paths in config.json's multiUser section point inside that mount (see docs/multi-user-deployment.md).
+# Put NANOBOT_INITIAL_PASSWORD_HASH in .env, single-quoted, because the hash contains `$`.
+services:
+  nanobot-gateway:
+    <<: *multiuser-bwrap-security
+    environment:
+      NANOBOT_INITIAL_PASSWORD_HASH: ${NANOBOT_INITIAL_PASSWORD_HASH:-}
+
+  nanobot-api:
+    <<: *multiuser-bwrap-security
+
+  nanobot-cli:
+    <<: *multiuser-bwrap-security

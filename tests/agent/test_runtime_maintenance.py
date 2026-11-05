@@ -46,7 +46,7 @@ def message(content="hello", *, kind=None):
 
 async def settle(agent):
     async with asyncio.timeout(3):
-        while agent._has_pending_work():
+        while agent.has_pending_work():
             await asyncio.sleep(0)
 
 

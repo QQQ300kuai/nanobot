@@ -395,7 +395,37 @@
     "account": {
       "section": "Compte",
       "logoutHint": "Déconnectez ce navigateur de la passerelle.",
-      "logout": "Se déconnecter"
+      "logout": "Se déconnecter",
+      "loginTitle": "Se connecter à nanobot",
+      "userId": "Identifiant",
+      "password": "Mot de passe",
+      "signIn": "Se connecter",
+      "loginRequired": "Saisissez votre identifiant et votre mot de passe",
+      "invalidCredentials": "Identifiant ou mot de passe incorrect",
+      "tooManyRequests": "Trop de tentatives. Patientez un instant puis réessayez.",
+      "sessionExpired": "Votre session a pris fin. Reconnectez-vous.",
+      "changePassword": "Changer le mot de passe",
+      "changePasswordHint": "Vous resterez connecté sur cet appareil.",
+      "currentPassword": "Mot de passe actuel",
+      "newPassword": "Nouveau mot de passe",
+      "passwordRequired": "Saisissez votre mot de passe actuel et le nouveau",
+      "cancel": "Annuler",
+      "save": "Enregistrer",
+      "usage": {
+        "title": "Utilisation des 30 derniers jours",
+        "tokens": "Jetons",
+        "requests": "Requêtes",
+        "failed": "Requêtes échouées",
+        "perUser": "Utilisation par utilisateur",
+        "unowned": "Non attribué",
+        "userSummary": "{{tokens}} jetons, {{requests}} requêtes"
+      },
+      "mcp": {
+        "title": "Serveurs MCP",
+        "empty": "Aucun serveur MCP n'est disponible pour votre compte.",
+        "secretSaved": "Enregistré. Laissez vide pour le conserver.",
+        "replaceHint": "Les champs remplis remplacent les valeurs enregistrées. Les champs laissés vides sont supprimés."
+      }
     },
     "system": {
       "section": "Système",
@@ -570,6 +600,7 @@
       "ariaLabel": "Sections des réglages"
     },
     "nav": {
+      "account": "Compte",
       "about": "À propos",
       "capabilities": "Fonctionnalités",
       "general": "Général",
@@ -1903,6 +1934,7 @@
         "run": "Exécuter une commande Shell",
         "removeContext": "Retirez les pièces jointes et le texte cité avant d’exécuter une commande."
       },
+      "followAdmin": "{{model}} (recommandé)",
       "chooseAI": "Choisir le modèle",
       "switchModel": "Changer de modèle",
       "manageModels": "Gérer les préréglages",

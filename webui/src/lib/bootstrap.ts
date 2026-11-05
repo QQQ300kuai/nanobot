@@ -5,9 +5,12 @@ const SECRET_STORAGE_KEY = "nanobot-webui.bootstrap-secret";
 const URL_SECRET_PARAM = "bootstrapSecret";
 
 export class BootstrapAuthRequiredError extends Error {
-  constructor(message = "bootstrap authentication required") {
+  /** True when the gateway asks for an account login instead of the shared secret. */
+  accountLogin: boolean;
+  constructor(message = "bootstrap authentication required", accountLogin = false) {
     super(message);
     this.name = "BootstrapAuthRequiredError";
+    this.accountLogin = accountLogin;
   }
 }
 
@@ -67,9 +70,12 @@ export async function fetchBootstrap(
   baseUrl: string = "",
   secret: string = "",
   timeoutMs?: number,
+  accountToken: string = "",
 ): Promise<BootstrapResponse> {
   const headers: Record<string, string> = {};
-  if (secret) {
+  if (accountToken) {
+    headers.Authorization = `Bearer ${accountToken}`;
+  } else if (secret) {
     headers["X-Nanobot-Auth"] = secret;
   }
   const res = await fetchWithTimeout(`${baseUrl}/webui/bootstrap`, {
@@ -79,7 +85,13 @@ export async function fetchBootstrap(
   }, timeoutMs);
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
-      throw new BootstrapAuthRequiredError(`bootstrap failed: HTTP ${res.status}`);
+      let accountLogin = false;
+      try {
+        accountLogin = ((await res.json()) as { auth?: unknown }).auth === "account";
+      } catch {
+        // Single-user gateways answer with a plain-text body.
+      }
+      throw new BootstrapAuthRequiredError(`bootstrap failed: HTTP ${res.status}`, accountLogin);
     }
     throw new Error(`bootstrap failed: HTTP ${res.status}`);
   }
@@ -101,8 +113,9 @@ export function deriveWsUrl(
   wsPath: string,
   token: string | null | undefined,
   wsUrl?: string | null,
+  credentialParam: "token" | "ticket" = "token",
 ): string {
-  const query = token ? `?token=${encodeURIComponent(token)}` : "";
+  const query = token ? `?${credentialParam}=${encodeURIComponent(token)}` : "";
   const path = wsPath && wsPath.startsWith("/") ? wsPath : `/${wsPath || ""}`;
   if (typeof window !== "undefined" && window.location.port === "5173") {
     const host = window.location.hostname.includes(":")
@@ -121,7 +134,7 @@ export function deriveWsUrl(
   if (wsUrl && /^(wss?|nanobot-host):\/\//i.test(wsUrl)) {
     if (!token) return wsUrl;
     const join = wsUrl.includes("?") ? "&" : "?";
-    return `${wsUrl}${join}token=${encodeURIComponent(token)}`;
+    return `${wsUrl}${join}${credentialParam}=${encodeURIComponent(token)}`;
   }
   if (typeof window === "undefined") {
     return `ws://127.0.0.1:8765${path}${query}`;

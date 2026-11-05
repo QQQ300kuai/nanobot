@@ -24,6 +24,7 @@ class LLMCallRecord:
     usage: LLMUsage | None = None
     error_status_code: int | None = None
     error_kind: str | None = None
+    user_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.started_at_ms < 0 or self.duration_ms < 0:

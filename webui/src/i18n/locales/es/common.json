@@ -395,7 +395,37 @@
     "account": {
       "section": "Cuenta",
       "logoutHint": "Desconecta este navegador de la puerta de enlace.",
-      "logout": "Cerrar sesión"
+      "logout": "Cerrar sesión",
+      "loginTitle": "Iniciar sesión en nanobot",
+      "userId": "ID de usuario",
+      "password": "Contraseña",
+      "signIn": "Iniciar sesión",
+      "loginRequired": "Introduce tu ID de usuario y tu contraseña",
+      "invalidCredentials": "ID de usuario o contraseña incorrectos",
+      "tooManyRequests": "Demasiados intentos. Espera un momento e inténtalo de nuevo.",
+      "sessionExpired": "Tu sesión ha terminado. Inicia sesión de nuevo.",
+      "changePassword": "Cambiar contraseña",
+      "changePasswordHint": "Seguirás con la sesión iniciada en este dispositivo.",
+      "currentPassword": "Contraseña actual",
+      "newPassword": "Nueva contraseña",
+      "passwordRequired": "Introduce tu contraseña actual y la nueva",
+      "cancel": "Cancelar",
+      "save": "Guardar",
+      "usage": {
+        "title": "Uso de los últimos 30 días",
+        "tokens": "Tokens",
+        "requests": "Solicitudes",
+        "failed": "Solicitudes fallidas",
+        "perUser": "Uso por usuario",
+        "unowned": "Sin asignar",
+        "userSummary": "{{tokens}} tokens, {{requests}} solicitudes"
+      },
+      "mcp": {
+        "title": "Servidores MCP",
+        "empty": "No hay servidores MCP disponibles para tu cuenta.",
+        "secretSaved": "Guardado. Déjalo vacío para conservarlo.",
+        "replaceHint": "Los campos rellenados sustituyen los valores guardados. Los campos vacíos se eliminan."
+      }
     },
     "system": {
       "section": "Sistema",
@@ -570,6 +600,7 @@
       "ariaLabel": "Secciones de ajustes"
     },
     "nav": {
+      "account": "Cuenta",
       "about": "Acerca de",
       "capabilities": "Funciones",
       "general": "General",
@@ -1904,6 +1935,7 @@
         "run": "Ejecutar comando de Shell",
         "removeContext": "Elimina los archivos adjuntos y el texto citado antes de ejecutar un comando."
       },
+      "followAdmin": "{{model}} (recomendado)",
       "chooseAI": "Elegir modelo",
       "switchModel": "Cambiar modelo",
       "manageModels": "Gestionar preajustes",

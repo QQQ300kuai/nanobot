@@ -48,8 +48,10 @@ class _FsTool(Tool):
         restrict_to_workspace: bool | None = None,
         sandbox_restricts_workspace: bool = False,
         extra_read_allowed_files: list[Path] | None = None,
+        media_dir: Path | None = None,
     ):
         self._workspace = workspace
+        self._media_dir = media_dir
         self._allowed_dir = allowed_dir
         # Legacy alias: extra_allowed_dirs is read-only. Write-capable tools
         # must opt in via extra_write_allowed_dirs.
@@ -94,6 +96,7 @@ class _FsTool(Tool):
             file_states=ctx.file_state_store,
             restrict_to_workspace=ctx.config.restrict_to_workspace,
             sandbox_restricts_workspace=sandbox_restricts,
+            media_dir=ctx.media_dir,
         )
 
     @property
@@ -138,6 +141,7 @@ class _FsTool(Tool):
             extra_allowed_dirs,
             extra_allowed_files,
             include_media_dir=include_media_dir,
+            media_dir=self._media_dir,
         )
 
     def _resolve_read(self, path: str) -> Path:

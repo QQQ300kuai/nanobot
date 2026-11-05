@@ -395,7 +395,37 @@
     "account": {
       "section": "Conta",
       "logoutHint": "Desconecte este navegador do gateway.",
-      "logout": "Sair"
+      "logout": "Sair",
+      "loginTitle": "Entrar no nanobot",
+      "userId": "ID de usuário",
+      "password": "Senha",
+      "signIn": "Entrar",
+      "loginRequired": "Digite seu ID de usuário e sua senha",
+      "invalidCredentials": "ID de usuário ou senha incorretos",
+      "tooManyRequests": "Muitas tentativas. Aguarde um instante e tente novamente.",
+      "sessionExpired": "Sua sessão terminou. Entre novamente.",
+      "changePassword": "Alterar senha",
+      "changePasswordHint": "Você continuará conectado neste dispositivo.",
+      "currentPassword": "Senha atual",
+      "newPassword": "Nova senha",
+      "passwordRequired": "Digite sua senha atual e a nova senha",
+      "cancel": "Cancelar",
+      "save": "Salvar",
+      "usage": {
+        "title": "Uso dos últimos 30 dias",
+        "tokens": "Tokens",
+        "requests": "Solicitações",
+        "failed": "Solicitações com falha",
+        "perUser": "Uso por usuário",
+        "unowned": "Sem atribuição",
+        "userSummary": "{{tokens}} tokens, {{requests}} solicitações"
+      },
+      "mcp": {
+        "title": "Servidores MCP",
+        "empty": "Nenhum servidor MCP está disponível para sua conta.",
+        "secretSaved": "Salvo. Deixe em branco para manter.",
+        "replaceHint": "Os campos preenchidos substituem os valores salvos. Os campos em branco são removidos."
+      }
     },
     "system": {
       "section": "Sistema",
@@ -570,6 +600,7 @@
       "ariaLabel": "Seções de configurações"
     },
     "nav": {
+      "account": "Conta",
       "about": "Sobre",
       "capabilities": "Recursos",
       "general": "Geral",
@@ -1917,6 +1948,7 @@
         "run": "Executar comando Shell",
         "removeContext": "Remova os anexos e o texto citado antes de executar um comando."
       },
+      "followAdmin": "{{model}} (recomendado)",
       "chooseAI": "Escolher modelo",
       "switchModel": "Trocar modelo",
       "manageModels": "Gerenciar presets",

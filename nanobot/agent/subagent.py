@@ -54,6 +54,7 @@ from nanobot.utils.prompt_templates import render_template
 
 if TYPE_CHECKING:
     from nanobot.agent.memory import Consolidator
+    from nanobot.multiuser.config import MultiUserConfig
 
 
 class _SubagentOrigin(TypedDict):
@@ -221,6 +222,8 @@ class SubagentManager:
         consolidator: Consolidator,
         network_config: NetworkConfig | None = None,
         session_manager: SessionManager | None = None,
+        multi_user: MultiUserConfig | None = None,
+        media_dir: Path | None = None,
     ):
         if cast(object, consolidator) is None:
             raise TypeError("SubagentManager requires a consolidator")
@@ -255,6 +258,9 @@ class SubagentManager:
         self.network_config = network_config or NetworkConfig()
         self.max_tool_result_chars = max_tool_result_chars
         self.restrict_to_workspace = restrict_to_workspace
+        # Subagent tools follow the parent loop's account sandbox policy.
+        self.multi_user = multi_user
+        self.media_dir = media_dir
         self.disabled_skills = set(disabled_skills or [])
         self.max_iterations = (
             max_iterations
@@ -533,6 +539,8 @@ class SubagentManager:
                 restrict_to_workspace=cfg.restrict_to_workspace,
                 workspace=root,
             ),
+            multi_user=self.multi_user,
+            media_dir=self.media_dir,
         )
         ToolLoader().load(ctx, registry, scope="subagent")
         return registry

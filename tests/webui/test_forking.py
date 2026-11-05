@@ -27,7 +27,9 @@ async def test_fork_handler_rejects_invalid_protocol_input(
         gateway=SimpleNamespace(session_manager=MagicMock()),
     )
 
-    await forking.handle_webui_fork_chat(channel, connection, envelope)
+    await forking.handle_webui_fork_chat(
+        channel, connection, envelope, session_manager=channel.gateway.session_manager,
+    )
 
     channel.send_webui_protocol_error.assert_awaited_once_with(connection, detail)
 
@@ -44,6 +46,7 @@ async def test_fork_handler_reports_unavailable_session_manager() -> None:
         channel,
         connection,
         {"source_chat_id": "source", "before_user_index": 0},
+        session_manager=None,
     )
 
     channel.send_webui_protocol_error.assert_awaited_once_with(
@@ -66,7 +69,9 @@ async def test_fork_handler_maps_invalid_source_and_internal_failure_to_stable_e
     envelope = {"source_chat_id": "source", "before_user_index": 0}
     monkeypatch.setattr(forking, "create_webui_chat_fork", AsyncMock(return_value=None))
 
-    await forking.handle_webui_fork_chat(channel, connection, envelope)
+    await forking.handle_webui_fork_chat(
+        channel, connection, envelope, session_manager=channel.gateway.session_manager,
+    )
     channel.send_webui_protocol_error.assert_awaited_once_with(
         connection,
         "invalid fork source or index",
@@ -78,7 +83,9 @@ async def test_fork_handler_maps_invalid_source_and_internal_failure_to_stable_e
         "create_webui_chat_fork",
         AsyncMock(side_effect=RuntimeError("broken transcript")),
     )
-    await forking.handle_webui_fork_chat(channel, connection, envelope)
+    await forking.handle_webui_fork_chat(
+        channel, connection, envelope, session_manager=channel.gateway.session_manager,
+    )
 
     warning.assert_called_once_with("fork_chat failed: {}", ANY)
     channel.send_webui_protocol_error.assert_awaited_once_with(connection, "fork_chat_failed")

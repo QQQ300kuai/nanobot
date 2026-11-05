@@ -557,6 +557,10 @@ export interface BootstrapResponse {
   model_name?: string | null;
   runtime_surface?: RuntimeSurface;
   runtime_capabilities?: RuntimeCapabilities;
+  /** Present only when the gateway runs with per-account logins. */
+  multi_user?: boolean;
+  user_id?: string;
+  is_admin?: boolean;
 }
 
 interface WebUITransportLimits {
@@ -671,6 +675,8 @@ export type ProviderOAuthCompletionResult = SettingsPayload | ProviderOAuthPendi
 
 export type RuntimeConfigValue = string | number | boolean | string[] | null;
 
+
+export type ChatModelsPayload = Pick<SettingsPayload, "agent" | "model_presets" | "model_call_order" | "providers">;
 
 export interface SettingsPayload {
   runtime_config?: Record<string, RuntimeConfigValue>;

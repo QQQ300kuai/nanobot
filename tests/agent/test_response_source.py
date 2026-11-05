@@ -351,6 +351,7 @@ async def test_websocket_wire_and_disk_replay_preserve_sources(history, tmp_path
     gateway.media.rewrite_local_markdown_images.side_effect = lambda text: text
     gateway.transcripts = WebUITranscriptRecorder(history.sessions)
     gateway.temporary_chats.should_persist_transcript = lambda _: not temporary
+    gateway.tenants.multi_user = False
     channel = WebSocketChannel({"allowFrom": ["*"]}, MessageBus(), gateway=gateway)
     generation, _ = await history.sessions.state.open_with_metadata("websocket:source-chat", {})
     channel._safe_send_to = AsyncMock()

@@ -18,7 +18,8 @@ export type SettingsSectionKey =
   | "memory"
   | "skills"
   | "runtime"
-  | "advanced";
+  | "advanced"
+  | "account";
 
 export function isCapabilitySection(section: SettingsSectionKey): boolean {
   return ["capabilities", "image", "voice", "browser", "memory"].includes(section);

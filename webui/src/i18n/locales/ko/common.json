@@ -395,7 +395,37 @@
     "account": {
       "section": "계정",
       "logoutHint": "이 브라우저와 게이트웨이의 연결을 끊습니다.",
-      "logout": "로그아웃"
+      "logout": "로그아웃",
+      "loginTitle": "nanobot에 로그인",
+      "userId": "사용자 ID",
+      "password": "비밀번호",
+      "signIn": "로그인",
+      "loginRequired": "사용자 ID와 비밀번호를 입력하세요",
+      "invalidCredentials": "사용자 ID 또는 비밀번호가 올바르지 않습니다",
+      "tooManyRequests": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도하세요",
+      "sessionExpired": "세션이 종료되었습니다. 다시 로그인하세요",
+      "changePassword": "비밀번호 변경",
+      "changePasswordHint": "이 기기에서는 로그인 상태가 유지됩니다.",
+      "currentPassword": "현재 비밀번호",
+      "newPassword": "새 비밀번호",
+      "passwordRequired": "현재 비밀번호와 새 비밀번호를 입력하세요",
+      "cancel": "취소",
+      "save": "저장",
+      "usage": {
+        "title": "최근 30일 사용량",
+        "tokens": "토큰",
+        "requests": "요청",
+        "failed": "실패한 요청",
+        "perUser": "사용자별 사용량",
+        "unowned": "미할당",
+        "userSummary": "토큰 {{tokens}}개, 요청 {{requests}}건"
+      },
+      "mcp": {
+        "title": "MCP 서버",
+        "empty": "이 계정에서 사용할 수 있는 MCP 서버가 없습니다.",
+        "secretSaved": "저장됨. 비워 두면 그대로 유지됩니다.",
+        "replaceHint": "입력한 항목은 저장된 값을 대체합니다. 비워 둔 항목은 삭제됩니다."
+      }
     },
     "system": {
       "section": "시스템",
@@ -570,6 +600,7 @@
       "ariaLabel": "설정 섹션"
     },
     "nav": {
+      "account": "계정",
       "about": "정보",
       "capabilities": "기능",
       "general": "일반",
@@ -1903,6 +1934,7 @@
         "run": "Shell 명령 실행",
         "removeContext": "명령을 실행하기 전에 첨부 파일과 인용문을 제거하세요."
       },
+      "followAdmin": "{{model}} (추천)",
       "chooseAI": "모델 선택",
       "switchModel": "모델 전환",
       "manageModels": "프리셋 관리",

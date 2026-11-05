@@ -4636,3 +4636,20 @@ def test_channels_login_requires_channel_name() -> None:
     result = runner.invoke(app, ["channels", "login"])
 
     assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("command", [["serve"], ["agent", "-m", "hi"]])
+def test_host_runners_refuse_multi_user_config(monkeypatch, tmp_path: Path, command) -> None:
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.multi_user.enabled = True
+    seen: dict[str, object] = {}
+    _patch_serve_runtime(monkeypatch, config, seen)
+    monkeypatch.setattr("nanobot.cli.commands._load_runtime_config", lambda *a, **k: config)
+    monkeypatch.setattr("nanobot.cli.agent._load_runtime_config", lambda *a, **k: config)
+
+    result = runner.invoke(app, [*command, "--config", str(config_file)])
+
+    assert result.exit_code == 1
+    assert "multi_user" in result.output
+    assert not seen

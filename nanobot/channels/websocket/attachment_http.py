@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from pathlib import Path
 from urllib.parse import unquote
 from weakref import WeakKeyDictionary
 
@@ -17,12 +18,17 @@ class AttachmentHTTP:
         self.store = store
         self._owners: WeakKeyDictionary[ServerConnection, str] = WeakKeyDictionary()
         self._tokens: set[str] = set()
+        # Upload directory per capability; absent means the store's shared directory.
+        self._token_dirs: dict[str, Path] = {}
 
-    def issue(self, connection: ServerConnection) -> dict[str, str]:
+    def issue(self, connection: ServerConnection, *, media_dir: Path | None = None) -> dict[str, str]:
+        """Issue the connection's upload capability; ``media_dir`` is its account's upload dir."""
         self.revoke(connection)
         token = secrets.token_urlsafe(32)
         self._owners[connection] = token
         self._tokens.add(token)
+        if media_dir is not None:
+            self._token_dirs[token] = media_dir
         return {"path": UPLOAD_PATH, "token": token}
 
     def owner(self, connection: ServerConnection) -> str:
@@ -31,6 +37,7 @@ class AttachmentHTTP:
     def revoke(self, connection: ServerConnection) -> None:
         owner = self._owners.pop(connection, "")
         self._tokens.discard(owner)
+        self._token_dirs.pop(owner, None)
         if owner:
             self.store.discard_owner(owner)
 
@@ -62,6 +69,7 @@ class AttachmentHTTP:
                         mime=request.headers.get("Content-Type", ""),
                         size=request.content_length or 0,
                         filename=unquote(request.headers.get("X-Attachment-Name", "")),
+                        media_dir=self._token_dirs.get(owner),
                     )
                     if owner not in self._tokens:
                         self.store.discard([reference], owner=owner)

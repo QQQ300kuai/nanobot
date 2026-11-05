@@ -281,3 +281,55 @@ async def test_sdk_invalid_internal_model_preset_metadata_fails_explicitly(
         await bot.run("hello", session_key="sdk:invalid-internal-metadata")
 
     assert base.calls == []
+
+
+@pytest.mark.parametrize("delete", [False, True])
+@pytest.mark.asyncio
+async def test_unavailable_selected_model_returns_session_to_current_admin_default(tmp_path, delete) -> None:
+    base = RecordingProvider("base-model")
+    selected = RecordingProvider("selected-model")
+    primary = RecordingProvider("new-primary-model")
+    presets = {
+        "selected": ModelPresetConfig(model="selected-model"),
+        "primary": ModelPresetConfig(model="new-primary-model"),
+    }
+    default = ProviderSnapshot(provider=base, model="base-model", context_window_tokens=8_000, signature=("base",))
+    enabled = set(presets)
+
+    def load_preset(name: str) -> ProviderSnapshot:
+        preset = presets[name]
+        return ProviderSnapshot(
+            provider=selected if name == "selected" else primary,
+            model=preset.model, context_window_tokens=8_000, signature=(name, preset.model),
+            model_preset=name,
+        )
+
+    loop = AgentLoop(
+        bus=MessageBus(), provider=base, workspace=tmp_path, model="base-model",
+        model_presets=presets, preset_snapshot_loader=load_preset,
+        preset_catalog_loader=lambda: {name: presets[name] for name in enabled},
+        provider_snapshot_loader=lambda: default,
+    )
+    loop.schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
+    await loop.set_session_model_preset("sdk:user", "selected")
+    await loop.process_direct("hello", session_key="sdk:user")
+    assert selected.calls == ["selected-model"]
+
+    enabled.remove("selected")
+    if delete:
+        del presets["selected"]
+    default = load_preset("primary")
+    loop.refresh_runtime_config()
+    reply = await loop.process_direct("hello again", session_key="sdk:user")
+    assert reply is not None and reply.content == "reply from new-primary-model"
+    assert selected.calls == ["selected-model"]
+    assert primary.calls == ["new-primary-model"]
+    restored = await loop.sessions.state.get("sdk:user")
+    assert model_preset_from_metadata(restored.metadata) is None
+    with pytest.raises(KeyError):
+        await loop.set_session_model_preset("sdk:user", "selected")
+
+    default = ProviderSnapshot(provider=base, model="base-model", context_window_tokens=8_000, signature=("base",))
+    loop.refresh_runtime_config()
+    await loop.process_direct("follow updated admin default", session_key="sdk:user")
+    assert base.calls == ["base-model"]

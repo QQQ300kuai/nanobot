@@ -129,6 +129,9 @@ class Nanobot:
         elif model_preset is not None:
             config.agents.defaults.model_preset = model_preset
 
+        from nanobot.multiuser.guard import refuse_multi_user_entry
+
+        refuse_multi_user_entry(config.multi_user, "Nanobot.from_config")
         tools = ToolRegistry()
         register_image_generation_tool(config, tools, workspace=config.workspace_path)
         mcp_provider = MCPProvider.from_config(config, tools)

@@ -11,6 +11,7 @@ from websockets.http11 import Response
 from nanobot.config.paths import get_media_dir
 from nanobot.security.workspace_access import WorkspaceScope
 from nanobot.webui.media_api import (
+    AccountMediaRoots,
     media_attachment_kind,
     serve_signed_media,
     sign_local_attachment,
@@ -35,11 +36,20 @@ class WebUIMediaGateway:
         logger: Any,
         media_dir: Callable[[str | None], Path] | None = None,
         secret: bytes | None = None,
+        account: str | None = None,
+        source_roots: tuple[Path, ...] | None = None,
+        account_roots: AccountMediaRoots | None = None,
     ) -> None:
+        """``account`` signs URLs that name one multi-user account, and ``source_roots`` limits
+        staging to that account's directories. ``account_roots`` lets the shared gateway serve
+        such URLs from the named account's roots."""
         self.workspace_path = workspace_path
         self.logger = logger
         self._media_dir: Callable[[str | None], Path] = media_dir or _default_media_dir
         self.secret = secret or secrets.token_bytes(32)
+        self._account = account
+        self._source_roots = source_roots
+        self._account_roots = account_roots
 
     def serve_signed_media(
         self,
@@ -56,6 +66,7 @@ class WebUIMediaGateway:
             request=request,
             media_dir=self._media_dir,
             scope_for_session=scope_for_session,
+            account_roots=self._account_roots,
         )
 
     def sign_or_stage_media_path(self, path: Path) -> dict[str, str] | None:
@@ -64,6 +75,8 @@ class WebUIMediaGateway:
             secret=self.secret,
             media_dir=self._media_dir,
             logger=self.logger,
+            account=self._account,
+            source_roots=self._source_roots,
         )
 
     def rewrite_local_markdown_images(
@@ -85,7 +98,7 @@ class WebUIMediaGateway:
         )
 
     def local_attachment_url(self, path: str, *, session_key: str) -> str:
-        return sign_local_attachment(path, session_key=session_key, secret=self.secret)
+        return sign_local_attachment(path, session_key=session_key, secret=self.secret, account=self._account)
 
     def augment_transcript_user_media(
         self, paths: list[str], local_paths: list[str], *, session_key: str,
@@ -100,7 +113,9 @@ class WebUIMediaGateway:
                 elif raw in local:
                     url = self.local_attachment_url(raw, session_key=session_key)
                 else:
-                    url = sign_media_path(path, secret=self.secret, media_dir=self._media_dir) or ""
+                    url = sign_media_path(
+                        path, secret=self.secret, media_dir=self._media_dir, account=self._account,
+                    ) or ""
             except OSError:
                 url = ""
             media.append({"kind": media_attachment_kind(path.name), "name": path.name, "url": url})

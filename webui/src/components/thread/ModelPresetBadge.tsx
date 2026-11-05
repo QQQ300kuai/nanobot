@@ -80,6 +80,7 @@ function compactModelName(model?: string | null): string | null {
 
 export interface ModelPresetOption {
   name: string;
+  label?: string;
   contextWindowTokens?: number;
   reasoningEffort?: string | null;
   model?: string | null;
@@ -147,9 +148,10 @@ export function ModelPresetBadge({
       ? [activePreset, ...modelPresets]
       : modelPresets.map((preset, index) => index === listedIndex ? activePreset : preset);
   const opensSetup = Boolean(onClick);
-  const canSwitch = !opensSetup && Boolean(onPresetChange) && activeName !== "" && presets.length > 1;
+  const hasSelection = activeName !== "" || listedIndex >= 0;
+  const canSwitch = !opensSetup && Boolean(onPresetChange) && hasSelection && presets.length > 1;
   const canOpenPicker = !opensSetup && (canSwitch || Boolean(onManageModels));
-  const pickerPresets = activeName && onPresetChange ? presets : [activePreset];
+  const pickerPresets = hasSelection && onPresetChange ? presets : [activePreset];
   const currentIndex = Math.max(0, presets.findIndex((preset) => preset.name === activeName));
   const pillHeight = isHero ? 32 : 36;
   const pillStride = pillHeight + PILL_GAP_PX;
@@ -381,7 +383,7 @@ export function ModelPresetBadge({
                       return (
                         <PresetPill
                           key={motion.index + offset}
-                          label={preset.name}
+                          label={preset.label ?? preset.name}
                           modelDetail={preset.model}
                           provider={preset.provider}
                           isHero={isHero}
@@ -438,7 +440,7 @@ export function ModelPresetBadge({
             <PresetOption
               key={preset.name}
               preset={preset}
-              label={preset.name || label}
+              label={preset.label ?? (preset.name || label)}
               selected={preset.name === activeName}
               onSelect={selectPreset}
             />

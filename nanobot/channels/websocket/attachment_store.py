@@ -73,6 +73,14 @@ class AttachmentStore:
         self._reserved_bytes = 0
         self._active = 0
         self._journal = media_dir / ".pending-attachments"
+        # Every directory that received an upload keeps its own crash journal.
+        self._journals: dict[Path, Path] = {media_dir: self._journal}
+
+    def _journal_for(self, media_dir: Path) -> Path:
+        journal = self._journals.get(media_dir)
+        if journal is None:
+            journal = self._journals[media_dir] = media_dir / ".pending-attachments"
+        return journal
 
     async def upload(
         self,
@@ -82,12 +90,14 @@ class AttachmentStore:
         mime: str,
         size: int,
         filename: str | None = None,
+        media_dir: Path | None = None,
     ) -> str:
         """Stream a declared-length binary body and return an opaque reference.
 
         No body bytes are requested until metadata and capacity are validated.
         The adapter must disable automatic request decompression and reject
         ambiguous framing, and must not buffer the complete body beforehand.
+        ``media_dir`` overrides the store's directory (a multi-user account's own).
         """
         self.prune()
         if not owner:
@@ -108,14 +118,16 @@ class AttachmentStore:
         stored = False
         created = False
         marker_created = False
+        target_dir = media_dir or self.media_dir
+        journal = self._journal_for(target_dir)
         try:
-            self.media_dir.mkdir(parents=True, exist_ok=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
             path = media_destination(
-                self.media_dir, mime,
+                target_dir, mime,
                 filename=filename if mime in DOCUMENT_MIME_ALLOWED else None,
             )
-            self._journal.mkdir(parents=True, exist_ok=True)
-            (self._journal / path.name).touch(exist_ok=False)
+            journal.mkdir(parents=True, exist_ok=True)
+            (journal / path.name).touch(exist_ok=False)
             marker_created = True
             received = 0
             # Exclusive creation prevents accidental overwrite or symlink following.
@@ -149,7 +161,7 @@ class AttachmentStore:
                     if created:
                         path.unlink(missing_ok=True)
                     if marker_created:
-                        (self._journal / path.name).unlink(missing_ok=True)
+                        (journal / path.name).unlink(missing_ok=True)
 
     def inspect(self, references: list[str], *, owner: str) -> list[StagedAttachment]:
         """Validate a complete batch without consuming it, allowing send retries."""
@@ -182,7 +194,7 @@ class AttachmentStore:
         paths = self.resolve(references, owner=owner)
         for reference in references:
             entry = self._entries[reference]
-            (self._journal / entry.path.name).unlink(missing_ok=True)
+            (self._journal_for(entry.path.parent) / entry.path.name).unlink(missing_ok=True)
             self._reserved_bytes -= self._entries.pop(reference).size
         return paths
 
@@ -194,7 +206,7 @@ class AttachmentStore:
             entry = self._entries.get(reference)
             if entry is not None and entry.owner == owner:
                 entry.path.unlink(missing_ok=True)
-                (self._journal / entry.path.name).unlink(missing_ok=True)
+                (self._journal_for(entry.path.parent) / entry.path.name).unlink(missing_ok=True)
                 self._reserved_bytes -= entry.size
                 del self._entries[reference]
 
@@ -203,14 +215,15 @@ class AttachmentStore:
         now = time.monotonic()
         # Crash remnants retain a marker; committed historical files never do.
         cutoff = time.time() - self.ttl_seconds - self.upload_timeout
-        for marker in self._journal.glob("*"):
-            if marker.is_file() and marker.stat().st_mtime < cutoff:
-                (self.media_dir / marker.name).unlink(missing_ok=True)
-                marker.unlink(missing_ok=True)
+        for media_dir, journal in tuple(self._journals.items()):
+            for marker in journal.glob("*"):
+                if marker.is_file() and marker.stat().st_mtime < cutoff:
+                    (media_dir / marker.name).unlink(missing_ok=True)
+                    marker.unlink(missing_ok=True)
         for reference, entry in list(self._entries.items()):
             if entry.expires <= now:
                 entry.path.unlink(missing_ok=True)
-                (self._journal / entry.path.name).unlink(missing_ok=True)
+                (self._journal_for(entry.path.parent) / entry.path.name).unlink(missing_ok=True)
                 self._reserved_bytes -= entry.size
                 del self._entries[reference]
 
@@ -220,6 +233,6 @@ class AttachmentStore:
             raise RuntimeError("Stop active uploads before clearing attachment storage")
         for reference, entry in list(self._entries.items()):
             entry.path.unlink(missing_ok=True)
-            (self._journal / entry.path.name).unlink(missing_ok=True)
+            (self._journal_for(entry.path.parent) / entry.path.name).unlink(missing_ok=True)
             self._reserved_bytes -= entry.size
             del self._entries[reference]

@@ -15,6 +15,7 @@ from nanobot.bus.events import INBOUND_META_USER_SHELL, OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.command.spec import BuiltinCommandSpec
 from nanobot.command.spec import CommandLifecycle as CommandLifecycle
+from nanobot.multiuser.identity import InvalidUserId, normalize_admins, validate_user_id
 from nanobot.providers.base import LLMUsage
 from nanobot.utils.cancellation import shield_and_drain
 from nanobot.utils.helpers import build_status_content
@@ -166,8 +167,45 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+def _admin_only_reply(ctx: CommandContext) -> OutboundMessage | None:
+    """Refuse a process-wide command to a multi-user account that is not an administrator."""
+    multi_user = ctx.loop.multi_user
+    if multi_user is None:
+        return None
+    try:
+        user_id = validate_user_id(ctx.msg.user_id or "")
+    except InvalidUserId:
+        user_id = None
+    if user_id is not None and user_id in normalize_admins(multi_user.admins):
+        return None
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content="This command is limited to administrators.",
+        metadata=dict(ctx.msg.metadata or {}),
+    )
+
+
+async def _restart_process(mode: str) -> None:
+    await asyncio.sleep(1)
+    argv = [sys.executable, "-m", "nanobot"] + sys.argv[1:]
+    if mode == "auto":
+        mode = "spawn" if sys.platform == "win32" else "exec"
+    if mode == "exec":
+        os.execv(sys.executable, argv)
+        return
+    if mode == "spawn":
+        kwargs: dict[str, Any] = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(argv, **kwargs)
+    os._exit(0)
+
+
 async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
     """Restart the process."""
+    if (refusal := _admin_only_reply(ctx)) is not None:
+        return refusal
     msg = ctx.msg
     set_restart_notice_to_env(
         channel=msg.channel,
@@ -175,23 +213,7 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
         metadata=dict(msg.metadata or {}),
     )
 
-    async def _do_restart():
-        await asyncio.sleep(1)
-        argv = [sys.executable, "-m", "nanobot"] + sys.argv[1:]
-        mode = ctx.loop.restart_mode or "auto"
-        if mode == "auto":
-            mode = "spawn" if sys.platform == "win32" else "exec"
-        if mode == "exec":
-            os.execv(sys.executable, argv)
-            return
-        if mode == "spawn":
-            kwargs: dict[str, Any] = {}
-            if sys.platform == "win32":
-                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-            subprocess.Popen(argv, **kwargs)
-        os._exit(0)
-
-    asyncio.create_task(_do_restart())
+    asyncio.create_task(_restart_process(ctx.loop.restart_mode or "auto"))
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content="Restarting...",
         metadata=dict(msg.metadata or {})
@@ -308,8 +330,7 @@ def _format_preset_names(names: list[str]) -> str:
 
 def _model_preset_names(loop: AgentLoop) -> list[str]:
     names = set(loop.model_presets)
-    names.add("default")
-    return ["default", *sorted(name for name in names if name != "default")]
+    return sorted(names, key=lambda name: (name != "default", name))
 
 
 def _command_error_message(exc: Exception) -> str:
@@ -334,6 +355,16 @@ async def _model_command_status(loop: AgentLoop, session: Session) -> str:
         f"- Current preset: `{active}`",
         f"- Available presets: {_format_preset_names(names)}",
     ])
+
+
+async def cmd_model_follow(ctx: CommandContext) -> OutboundMessage:
+    await ctx.loop.set_session_model_preset(ctx.key, None)
+    session = await ctx.loop.sessions.state.get(ctx.key)
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=await _model_command_status(ctx.loop, session),
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
 
 
 async def cmd_model(ctx: CommandContext) -> OutboundMessage:
@@ -831,6 +862,8 @@ async def cmd_history(ctx: CommandContext) -> OutboundMessage:
 
 async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
     """List, approve, deny or revoke pairing requests."""
+    if (refusal := _admin_only_reply(ctx)) is not None:
+        return refusal
     from nanobot.pairing import PAIRING_COMMAND_META_KEY, handle_pairing_command
     from nanobot.pairing.events import PairingChanged
 
@@ -970,6 +1003,7 @@ def register_core_commands(router: CommandRouter) -> None:
     router.exact("/compact", cmd_compact, session_queue=True)
     router.exact("/status", cmd_status)
     router.exact("/model", cmd_model)
+    router.exact("/model-follow", cmd_model_follow)
     router.prefix("/model ", cmd_model)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)

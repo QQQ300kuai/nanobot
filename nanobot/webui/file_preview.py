@@ -123,6 +123,13 @@ def file_preview_availability_payload(
     return {"available": True}
 
 
+def _media_read_roots(scope: WorkspaceScope) -> list[Path]:
+    """The media a restricted scope may read; an account scope never gets the shared dir."""
+    if scope.account is not None:
+        return [scope.media_root] if scope.media_root is not None else []
+    return [scope.media_root or get_media_dir()]
+
+
 def resolve_file_path(
     raw_path: str | None, *, scope: WorkspaceScope, literal: bool = False,
 ) -> Path:
@@ -133,7 +140,7 @@ def resolve_file_path(
         raise WebUIFilePreviewError(400, "path is too long")
 
     try:
-        extra_roots = [get_media_dir()] if scope.restrict_to_workspace else None
+        extra_roots = _media_read_roots(scope) if scope.restrict_to_workspace else None
         resolved = resolve_allowed_path(
             path,
             workspace=scope.project_path,

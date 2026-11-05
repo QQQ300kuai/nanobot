@@ -21,9 +21,10 @@ from websockets.http11 import Request as WsRequest
 from websockets.http11 import Response as WsResponse
 from websockets.protocol import CONNECTING
 
-from nanobot.bus.events import OutboundMessage
+from nanobot.bus.events import OUTBOUND_META_ACCOUNT, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
+from nanobot.channels.websocket.account_http import ACCOUNT_PATHS, AccountHTTP
 from nanobot.channels.websocket.binary_http import BinaryHTTPBridge
 from nanobot.config_base import Base
 from nanobot.runtime_admission import RuntimeMaintenanceError
@@ -40,6 +41,7 @@ from nanobot.webui.http_utils import (
 from nanobot.webui.inbound_commands import WebUICommandRouter
 from nanobot.webui.outbound_delivery import ChatAudience, WebUIAudience, WebUIOutboundDelivery
 from nanobot.webui.session_identity import is_valid_webui_chat_id
+from nanobot.webui.tenants import WebUITenant, WebUITenantError
 from nanobot.webui.websocket_logging import websockets_server_logger
 
 # Plain HTTP WebUI routes also run through websockets.process_request.
@@ -313,6 +315,10 @@ def _parse_envelope(raw: str) -> dict[str, Any] | None:
     return envelope
 
 
+# Identity and filesystem scope come from the authenticated account in multi-user mode.
+_MULTI_USER_UNTRUSTED_ENVELOPE_KEYS = frozenset({"user_id", "workspace_scope", "project_path"})
+
+
 class _ListenerUnavailableError(OSError):
     """Raised when a previously bound listener loses its serving socket."""
 
@@ -322,6 +328,24 @@ class _OutboundFrame:
     raw: str
     utf8_bytes: int
     label: str
+
+
+class _AccountTransport:
+    """Narrow the channel's recipients to one account's connections (multi-user mode)."""
+
+    def __init__(self, channel: WebSocketChannel, user_id: str) -> None:
+        self._channel = channel
+        self._user_id = user_id
+
+    def webui_recipients(self, audience: WebUIAudience) -> tuple[ServerConnection, ...]:
+        user_for = self._channel.gateway.endpoint.user_for
+        return tuple(
+            connection for connection in self._channel.webui_recipients(audience)
+            if user_for(connection) == self._user_id
+        )
+
+    async def webui_send_raw(self, connection: ServerConnection, raw: str, *, label: str = "") -> None:
+        await self._channel.webui_send_raw(connection, raw, label=label)
 
 
 @dataclass(slots=True)
@@ -365,6 +389,8 @@ class WebSocketChannel(BaseChannel):
 
         self.gateway = gateway
         self._uploads = gateway.uploads
+        self._account_http = AccountHTTP(gateway.accounts, gateway.tenants, gateway.tokens) if gateway.accounts is not None else None
+        self._tenants = gateway.tenants
         self._outbound = WebUIOutboundDelivery(
             self,
             media=gateway.media,
@@ -372,11 +398,43 @@ class WebSocketChannel(BaseChannel):
             temporary_chats=gateway.temporary_chats,
             session_projection=gateway.session_projection,
         )
-        self._commands = WebUICommandRouter(self, gateway, outbound=self._outbound)
+        # Multi-user mode: one delivery per account tenant, reaching only that account's connections.
+        self._account_deliveries: dict[str, tuple[WebUITenant, WebUIOutboundDelivery]] = {}
+        self._commands = WebUICommandRouter(
+            self, gateway, outbound=self._outbound, deliveries=self._delivery,
+        )
         self._webui_request_tasks = self._commands.request_tasks
         self._webui_request_operations = self._commands.request_operations
         self._webui_request_locks = self._commands.request_locks
 
+
+    def _delivery(self, tenant: WebUITenant) -> WebUIOutboundDelivery:
+        if tenant.user_id is None:
+            return self._outbound
+        cached = self._account_deliveries.get(tenant.user_id)
+        if cached is not None and cached[0] is tenant:
+            return cached[1]
+        delivery = WebUIOutboundDelivery(
+            _AccountTransport(self, tenant.user_id),
+            media=tenant.media,
+            transcripts=tenant.transcripts,
+            temporary_chats=tenant.temporary_chats,
+            session_projection=tenant.session_projection,
+            account=tenant.user_id,
+        )
+        self._account_deliveries[tenant.user_id] = (tenant, delivery)
+        return delivery
+
+    def _outbound_for(self, chat_id: str, metadata: dict[str, Any] | None) -> WebUIOutboundDelivery | None:
+        """Pick the delivery for an outbound message; multi-user output must name its account."""
+        if not self._tenants.multi_user:
+            return self._outbound
+        account = (metadata or {}).get(OUTBOUND_META_ACCOUNT)
+        tenant = self._tenants.current(account) if isinstance(account, str) else None
+        if tenant is None:
+            self.logger.warning("Dropping outbound for chat_id={} without an open account", chat_id)
+            return None
+        return self._delivery(tenant)
 
     def webui_subscribers(self, chat_id: str) -> tuple[ServerConnection, ...]:
         """Return a stable snapshot of one chat's transport subscribers."""
@@ -422,6 +480,7 @@ class WebSocketChannel(BaseChannel):
     async def webui_dispatch_message(
         self,
         *,
+        connection: ServerConnection,
         sender_id: str,
         chat_id: str,
         content: str,
@@ -442,6 +501,7 @@ class WebSocketChannel(BaseChannel):
             session_key=session_key,
             require_existing_session=require_existing_session,
             session_generation=session_generation,
+            user_id=self.gateway.endpoint.user_for(connection),
         )
 
     def _attach(self, connection: ServerConnection, chat_id: str) -> None:
@@ -676,6 +736,8 @@ class WebSocketChannel(BaseChannel):
         async def handle_binary(request: web.BaseRequest) -> web.StreamResponse:
             try:
                 with self.bus.admission.activity():
+                    if self._account_http is not None and request.path in ACCOUNT_PATHS:
+                        return await self._account_http.handle(request)
                     return await self._uploads.handle(request)
             except RuntimeMaintenanceError:
                 return web.json_response({"error": "Gateway update is being verified"}, status=503)
@@ -814,14 +876,23 @@ class WebSocketChannel(BaseChannel):
         from nanobot.webui.client_contract import gateway_identity
 
         try:
+            try:
+                tenant = await self._tenants.resolve(self.gateway.endpoint.user_for(connection))
+            except WebUITenantError:
+                self.logger.exception("closing connection: account runtime unavailable")
+                await connection.send(json.dumps({"event": "error", "detail": "account_unavailable"}))
+                return
+            self._tenants.issue(tenant, default_chat_id)
             await connection.send(
                 json.dumps(
                     {
                         "event": "ready",
                         "chat_id": default_chat_id,
                         "client_id": client_id,
-                        **({"upload": self._uploads.issue(connection)}
-                           if self.is_allowed(client_id) else {}),
+                        **({"upload": self._uploads.issue(
+                            connection,
+                            media_dir=tenant.media_dir / "websocket" if tenant.media_dir is not None else None,
+                        )} if self.is_allowed(client_id) else {}),
                         **({"terminal": gateway_identity(self.gateway.tokens.instance_id)}
                            if _query_first(query, "terminal_protocol") == "1" else {}),
                     },
@@ -831,7 +902,7 @@ class WebSocketChannel(BaseChannel):
             # Register only after ready is successfully sent to avoid out-of-order sends
             self._conn_default[connection] = default_chat_id
             self._attach(connection, default_chat_id)
-            await self._outbound.hydrate(default_chat_id)
+            await self._delivery(tenant).hydrate(default_chat_id)
 
             async for raw in connection:
                 if isinstance(raw, bytes):
@@ -858,6 +929,7 @@ class WebSocketChannel(BaseChannel):
                     content=content,
                     metadata={"remote": getattr(connection, "remote_address", None)},
                     is_dm=False,
+                    user_id=self.gateway.endpoint.user_for(connection),
                 )
         except Exception as e:
             self.logger.debug("connection ended: {}", e)
@@ -865,12 +937,26 @@ class WebSocketChannel(BaseChannel):
             await self._cleanup_connection(connection)
 
 
+    async def disconnect_user(self, user_id: str) -> None:
+        """Close every connection bound to ``user_id`` (an account removed from the allowlist)."""
+        user_for = self.gateway.endpoint.user_for
+        for connection in tuple(self._connection_outbound):
+            if user_for(connection) == user_id:
+                await self._retire_connection(
+                    connection, close_connection=True, close_code=1008, close_reason="account removed",
+                )
+
     async def _dispatch_envelope(
         self,
         connection: ServerConnection,
         client_id: str,
         envelope: dict[str, Any],
     ) -> None:
+        if self.gateway.endpoint.user_for(connection) is not None:
+            envelope = {
+                key: value for key, value in envelope.items()
+                if key not in _MULTI_USER_UNTRUSTED_ENVELOPE_KEYS
+            }
         await self._dispatch_active_envelope(connection, client_id, envelope)
 
     async def _dispatch_active_envelope(
@@ -1106,7 +1192,8 @@ class WebSocketChannel(BaseChannel):
         await asyncio.sleep(0)
 
     async def send(self, msg: OutboundMessage) -> None:
-        await self._outbound.send(msg)
+        if (outbound := self._outbound_for(msg.chat_id, msg.metadata)) is not None:
+            await outbound.send(msg)
 
     def prepare_tool_events(self, msg: OutboundMessage) -> OutboundMessage:
         return msg
@@ -1119,7 +1206,8 @@ class WebSocketChannel(BaseChannel):
         *,
         stream_id: str | None = None,
     ) -> None:
-        await self._outbound.send_reasoning_delta(chat_id, delta, metadata, stream_id=stream_id)
+        if (outbound := self._outbound_for(chat_id, metadata)) is not None:
+            await outbound.send_reasoning_delta(chat_id, delta, metadata, stream_id=stream_id)
 
     async def send_reasoning_end(
         self,
@@ -1128,7 +1216,8 @@ class WebSocketChannel(BaseChannel):
         *,
         stream_id: str | None = None,
     ) -> None:
-        await self._outbound.send_reasoning_end(chat_id, metadata, stream_id=stream_id)
+        if (outbound := self._outbound_for(chat_id, metadata)) is not None:
+            await outbound.send_reasoning_end(chat_id, metadata, stream_id=stream_id)
 
     async def send_file_edit_events(
         self,
@@ -1136,7 +1225,8 @@ class WebSocketChannel(BaseChannel):
         edits: list[dict[str, Any]],
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        await self._outbound.send_file_edit_events(chat_id, edits, metadata)
+        if (outbound := self._outbound_for(chat_id, metadata)) is not None:
+            await outbound.send_file_edit_events(chat_id, edits, metadata)
 
     async def send_delta(
         self,
@@ -1149,7 +1239,8 @@ class WebSocketChannel(BaseChannel):
         resuming: bool = False,
         merge_next: bool = False,
     ) -> None:
-        await self._outbound.send_delta(
-            chat_id, delta, metadata, stream_id=stream_id,
-            stream_end=stream_end, resuming=resuming, merge_next=merge_next,
-        )
+        if (outbound := self._outbound_for(chat_id, metadata)) is not None:
+            await outbound.send_delta(
+                chat_id, delta, metadata, stream_id=stream_id,
+                stream_end=stream_end, resuming=resuming, merge_next=merge_next,
+            )

@@ -5,7 +5,7 @@ import time
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 from loguru import logger
@@ -85,6 +85,41 @@ class _WebsocketTurn:
 _WEBSOCKET_ACTIVE_TURNS: dict[str, dict[str, _WebsocketTurn]] = {}
 
 
+@dataclass(frozen=True)
+class _TurnTable:
+    started_at: dict[str, float]
+    turn_ids: dict[str, str]
+    owners: dict[str, str]
+    active: dict[str, dict[str, _WebsocketTurn]]
+
+
+# The module maps above serve the single-user gateway (``user_id=None``). In multi-user mode
+# each account gets its own table, so a chat id reused by another account never reaches it.
+_SHARED_TURNS = _TurnTable(
+    _WEBSOCKET_TURN_WALL_STARTED_AT, _WEBSOCKET_TURN_IDS, _WEBSOCKET_TURN_OWNERS, _WEBSOCKET_ACTIVE_TURNS,
+)
+_ACCOUNT_TURNS: dict[str, _TurnTable] = {}
+
+
+class WebsocketTurnScope(TypedDict, total=False):
+    """Keyword arguments selecting an account's turn table; empty for the single-user gateway."""
+
+    user_id: str
+
+
+def websocket_turn_scope(user_id: str | None) -> WebsocketTurnScope:
+    return {} if user_id is None else {"user_id": user_id}
+
+
+def _turns(user_id: str | None) -> _TurnTable:
+    if user_id is None:
+        return _SHARED_TURNS
+    table = _ACCOUNT_TURNS.get(user_id)
+    if table is None:
+        table = _ACCOUNT_TURNS[user_id] = _TurnTable({}, {}, {}, {})
+    return table
+
+
 def _session_message_public_metadata(
     envelope: SessionMessageEnvelope,
 ) -> dict[str, Any]:
@@ -102,23 +137,24 @@ def _validated_llm_runtime(value: object) -> LLMRuntime | None:
     return value if isinstance(value, LLMRuntime) else None
 
 
-def _sync_websocket_turn_projection(chat_id: str) -> None:
-    turns = _WEBSOCKET_ACTIVE_TURNS.get(chat_id)
+def _sync_websocket_turn_projection(chat_id: str, user_id: str | None = None) -> None:
+    table = _turns(user_id)
+    turns = table.active.get(chat_id)
     if not turns:
-        _WEBSOCKET_ACTIVE_TURNS.pop(chat_id, None)
-        _WEBSOCKET_TURN_WALL_STARTED_AT.pop(chat_id, None)
-        _WEBSOCKET_TURN_IDS.pop(chat_id, None)
-        _WEBSOCKET_TURN_OWNERS.pop(chat_id, None)
+        table.active.pop(chat_id, None)
+        table.started_at.pop(chat_id, None)
+        table.turn_ids.pop(chat_id, None)
+        table.owners.pop(chat_id, None)
         return
 
     owner = next(reversed(turns))
     turn = turns[owner]
-    _WEBSOCKET_TURN_WALL_STARTED_AT[chat_id] = turn.started_at
-    _WEBSOCKET_TURN_OWNERS[chat_id] = owner
+    table.started_at[chat_id] = turn.started_at
+    table.owners[chat_id] = owner
     if turn.turn_id is None:
-        _WEBSOCKET_TURN_IDS.pop(chat_id, None)
+        table.turn_ids.pop(chat_id, None)
     else:
-        _WEBSOCKET_TURN_IDS[chat_id] = turn.turn_id
+        table.turn_ids[chat_id] = turn.turn_id
 
 
 def mark_webui_session(session: Session, metadata: dict[str, Any]) -> bool:
@@ -337,29 +373,31 @@ async def maybe_generate_webui_title_after_turn(
     )
 
 
-def websocket_turn_wall_started_at(chat_id: str) -> float | None:
+def websocket_turn_wall_started_at(chat_id: str, *, user_id: str | None = None) -> float | None:
     """Return ``time.time()`` when the active user turn began, if still running."""
-    return _WEBSOCKET_TURN_WALL_STARTED_AT.get(chat_id)
+    return _turns(user_id).started_at.get(chat_id)
 
 
-def websocket_turn_id(chat_id: str) -> str | None:
+def websocket_turn_id(chat_id: str, *, user_id: str | None = None) -> str | None:
     """Return the WebUI identity of the active turn, when one was provided."""
-    return _WEBSOCKET_TURN_IDS.get(chat_id)
+    return _turns(user_id).turn_ids.get(chat_id)
 
 
 def register_queued_websocket_turn_if_idle(
     chat_id: str,
     turn_id: str | None,
+    *,
+    user_id: str | None = None,
 ) -> str | None:
     """Track an accepted WebUI turn while it waits for AgentLoop admission."""
-    if websocket_turn_wall_started_at(chat_id) is not None:
+    if websocket_turn_wall_started_at(chat_id, user_id=user_id) is not None:
         return None
     owner = uuid4().hex
-    _WEBSOCKET_ACTIVE_TURNS.setdefault(chat_id, {})[owner] = _WebsocketTurn(
+    _turns(user_id).active.setdefault(chat_id, {})[owner] = _WebsocketTurn(
         started_at=time.time(),
         turn_id=turn_id,
     )
-    _sync_websocket_turn_projection(chat_id)
+    _sync_websocket_turn_projection(chat_id, user_id)
     return owner
 
 
@@ -367,18 +405,22 @@ def websocket_turn_owner_is_registered(
     chat_id: str,
     owner: str,
     turn_id: str | None,
+    *,
+    user_id: str | None = None,
 ) -> bool:
     """Return whether websocket ingress registered this owner for the turn."""
-    turn = _WEBSOCKET_ACTIVE_TURNS.get(chat_id, {}).get(owner)
+    turn = _turns(user_id).active.get(chat_id, {}).get(owner)
     return turn is not None and turn.turn_id == turn_id
 
 
 def websocket_turn_transcript_persistence_failed(
     chat_id: str,
     owner: str | None = None,
+    *,
+    user_id: str | None = None,
 ) -> bool:
     """Return whether one active owner has an incomplete canonical transcript."""
-    turns = _WEBSOCKET_ACTIVE_TURNS.get(chat_id)
+    turns = _turns(user_id).active.get(chat_id)
     if not turns:
         return False
     selected_owner = owner or next(reversed(turns))
@@ -389,11 +431,13 @@ def websocket_turn_transcript_persistence_failed(
 def mark_websocket_turn_transcript_persistence_failed(
     chat_id: str,
     owner: str | None,
+    *,
+    user_id: str | None = None,
 ) -> bool:
     """Keep a turn active when any canonical display event could not be written."""
     if not owner:
         return False
-    turns = _WEBSOCKET_ACTIVE_TURNS.get(chat_id)
+    turns = _turns(user_id).active.get(chat_id)
     if turns is None or owner not in turns:
         return False
     turns[owner] = replace(turns[owner], transcript_persistence_failed=True)
@@ -405,24 +449,25 @@ def clear_websocket_turn_if_current(
     owner: str | None,
     *,
     preserve_persistence_failure: bool = False,
+    user_id: str | None = None,
 ) -> bool:
     """Clear one lifecycle owner without disturbing concurrent turns for the chat."""
     if not owner:
         return False
-    turns = _WEBSOCKET_ACTIVE_TURNS.get(chat_id)
+    turns = _turns(user_id).active.get(chat_id)
     if turns is None or owner not in turns:
         return False
     if preserve_persistence_failure and turns[owner].transcript_persistence_failed:
         return False
     turns.pop(owner)
-    _sync_websocket_turn_projection(chat_id)
+    _sync_websocket_turn_projection(chat_id, user_id)
     return True
 
 
-def clear_websocket_turns(chat_id: str) -> None:
+def clear_websocket_turns(chat_id: str, *, user_id: str | None = None) -> None:
     """Forget every in-process turn projection for a discarded chat."""
-    _WEBSOCKET_ACTIVE_TURNS.pop(chat_id, None)
-    _sync_websocket_turn_projection(chat_id)
+    _turns(user_id).active.pop(chat_id, None)
+    _sync_websocket_turn_projection(chat_id, user_id)
 
 
 async def publish_turn_run_status(
@@ -431,8 +476,12 @@ async def publish_turn_run_status(
     status: str,
     *,
     started_at: float | None = None,
+    user_id: str | None = None,
 ) -> None:
-    """Notify WebSocket clients while a user turn is executing (timing strip)."""
+    """Notify WebSocket clients while a user turn is executing (timing strip).
+
+    ``user_id`` selects the account's turn table in multi-user mode.
+    """
     if msg.channel != "websocket":
         return
     cid = str(msg.chat_id)
@@ -449,11 +498,11 @@ async def publish_turn_run_status(
             msg.metadata[WEBSOCKET_TURN_OWNER_METADATA_KEY] = owner
         turn_id = msg.metadata.get(WEBUI_TURN_METADATA_KEY)
         current_turn_id = turn_id if isinstance(turn_id, str) and turn_id else None
-        turns = _WEBSOCKET_ACTIVE_TURNS.setdefault(cid, {})
+        turns = _turns(user_id).active.setdefault(cid, {})
         # Re-registration makes this owner the latest projection.
         turns.pop(owner, None)
         turns[owner] = _WebsocketTurn(started_at=t0, turn_id=current_turn_id)
-        _sync_websocket_turn_projection(cid)
+        _sync_websocket_turn_projection(cid, user_id)
     await bus.publish_outbound(
         outbound_message_for_event(
             channel=msg.channel,
@@ -468,6 +517,8 @@ class WebuiTurnRoutePolicy:
     """Expose independently dispatched agent turns to WebUI sessions."""
 
     sessions: SessionManager
+    # Account whose runtime owns this policy (multi-user mode); selects its turn table.
+    account: str | None = None
 
     def __call__(
         self,
@@ -514,6 +565,7 @@ class WebuiTurnRoutePolicy:
                         str(msg.chat_id),
                         queued_owner,
                         current_turn_id,
+                        user_id=self.account,
                     )
                 )
                 else uuid4().hex
@@ -587,6 +639,8 @@ class WebuiTurnCoordinator:
     sessions: SessionManager
     schedule_background: Callable[[Awaitable[None]], None]
     recovery: RecoveryCoordinator | None = None
+    # Account whose runtime owns this coordinator (multi-user mode); selects its turn table.
+    account: str | None = None
 
     def subscribe(self) -> Callable[[], None]:
         """Subscribe this coordinator to runtime events."""
@@ -715,6 +769,7 @@ class WebuiTurnCoordinator:
             self._ctx_msg(event.context),
             event.status,
             started_at=event.started_at,
+            user_id=self.account,
         )
 
     async def _handle_turn_runtime_admitted(self, event: TurnRuntimeAdmitted) -> None:

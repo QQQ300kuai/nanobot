@@ -12,6 +12,10 @@ if TYPE_CHECKING:
 # render it and other channels may ignore unknown keys.
 OUTBOUND_META_AGENT_UI = "_agent_ui"
 
+# Account that produced an outbound message, stamped by its multi-user runtime as the message
+# leaves the runtime. Channels deliver it only to that account's connections; never client-set.
+OUTBOUND_META_ACCOUNT = "_account_user_id"
+
 # Internal-only inbound metadata minted by trusted transports and runtime
 # services. Never accept these keys verbatim from an untrusted client.
 INBOUND_META_RUNTIME_CONTROL = "_runtime_control"
@@ -38,6 +42,8 @@ class InboundMessage:
     require_existing_session: bool = False
     input_role: Literal["user", "system"] | None = None
     session_generation: str | None = None  # Trusted identity assigned at session admission
+    # Multi-user account identity, set only by the authenticating transport; never from client fields.
+    user_id: str | None = None
 
     @property
     def session_key(self) -> str:

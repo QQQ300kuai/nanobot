@@ -24,6 +24,7 @@ from nanobot.config.loader import resolve_env_refs
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Config, ProviderConfig
 from nanobot.providers.registry import find_by_name
+from nanobot.utils.file_io import ensure_dir
 from nanobot.utils.media_decode import FileSizeExceeded, save_base64_data_url
 
 TranscriptionProviderName = str
@@ -152,8 +153,12 @@ async def transcribe_audio_data_url(
     config: EffectiveTranscriptionConfig,
     *,
     duration_ms: Any = None,
+    media_dir: Path | None = None,
 ) -> str:
-    """Validate, persist, transcribe, and remove a WebUI audio data URL."""
+    """Validate, persist, transcribe, and remove a WebUI audio data URL.
+
+    ``media_dir`` is where the audio is staged; ``None`` is the shared WebUI transcription dir.
+    """
     if not isinstance(data_url, str) or not data_url:
         raise TranscriptionIngressError("missing_audio")
     if not config.enabled:
@@ -176,7 +181,7 @@ async def transcribe_audio_data_url(
     try:
         audio_path = save_base64_data_url(
             data_url,
-            get_media_dir("webui-transcription"),
+            ensure_dir(media_dir) if media_dir is not None else get_media_dir("webui-transcription"),
             max_bytes=max_bytes,
         )
     except FileSizeExceeded as exc:

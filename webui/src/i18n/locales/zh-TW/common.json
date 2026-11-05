@@ -395,7 +395,37 @@
     "account": {
       "section": "帳戶",
       "logoutHint": "斷開此瀏覽器與閘道器的連線",
-      "logout": "退出登入"
+      "logout": "退出登入",
+      "loginTitle": "登入 nanobot",
+      "userId": "使用者 ID",
+      "password": "密碼",
+      "signIn": "登入",
+      "loginRequired": "請輸入使用者 ID 和密碼",
+      "invalidCredentials": "使用者 ID 或密碼錯誤",
+      "tooManyRequests": "嘗試次數過多,請稍後再試",
+      "sessionExpired": "登入已過期,請重新登入",
+      "changePassword": "變更密碼",
+      "changePasswordHint": "你在此裝置上仍會保持登入。",
+      "currentPassword": "目前密碼",
+      "newPassword": "新密碼",
+      "passwordRequired": "請輸入目前密碼和新密碼",
+      "cancel": "取消",
+      "save": "儲存",
+      "usage": {
+        "title": "近 30 天用量",
+        "tokens": "Token",
+        "requests": "請求數",
+        "failed": "失敗請求",
+        "perUser": "依使用者統計",
+        "unowned": "未歸屬",
+        "userSummary": "{{tokens}} 個 Token,{{requests}} 次請求"
+      },
+      "mcp": {
+        "title": "MCP 服務",
+        "empty": "你的帳號目前沒有可用的 MCP 服務",
+        "secretSaved": "已儲存,留空則維持不變",
+        "replaceHint": "填寫的欄位會取代已儲存的值,留空的欄位會被清除"
+      }
     },
     "system": {
       "section": "系統",
@@ -570,6 +600,7 @@
       "ariaLabel": "設定區段"
     },
     "nav": {
+      "account": "帳號",
       "about": "關於",
       "capabilities": "功能",
       "general": "一般",
@@ -1903,6 +1934,7 @@
         "run": "執行 Shell 命令",
         "removeContext": "執行命令前，請移除附件和引用文字。"
       },
+      "followAdmin": "{{model}}（推薦）",
       "chooseAI": "選擇模型",
       "switchModel": "切換模型",
       "manageModels": "管理預設",

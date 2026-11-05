@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from nanobot.bus.queue import MessageBus
     from nanobot.config.schema import ProvidersConfig, ToolsConfig
     from nanobot.cron.service import CronService
+    from nanobot.multiuser.config import MultiUserConfig
     from nanobot.providers.factory import ProviderSnapshot
     from nanobot.security.workspace_access import WorkspaceSandboxStatus, WorkspaceScope
     from nanobot.session.manager import SessionManager
@@ -105,3 +106,5 @@ class ToolContext:
     timezone: str = "UTC"
     workspace_sandbox: WorkspaceSandboxStatus | None = None
     runtime_control: RuntimeControl | None = None
+    multi_user: MultiUserConfig | None = None
+    media_dir: Path | None = None

@@ -14,12 +14,8 @@ from nanobot.webui.transcript import session_display_facts
 if TYPE_CHECKING:
     from websockets.asyncio.server import ServerConnection
 
-    from nanobot.webui.gateway_services import GatewayServices
-
 
 class WebUIForkHost(Protocol):
-    gateway: GatewayServices
-
     async def send_webui_protocol_error(
         self,
         connection: ServerConnection,
@@ -59,6 +55,8 @@ async def handle_webui_fork_chat(
     channel: WebUIForkHost,
     connection: ServerConnection,
     envelope: Mapping[str, Any],
+    *,
+    session_manager: SessionManager | None,
 ) -> None:
     """Handle the WebUI ``fork_chat`` websocket command.
 
@@ -75,7 +73,6 @@ async def handle_webui_fork_chat(
         await channel.send_webui_protocol_error(connection, "invalid before_user_index")
         return
 
-    session_manager = channel.gateway.session_manager
     if session_manager is None:
         await channel.send_webui_protocol_error(connection, "session_manager_unavailable")
         return

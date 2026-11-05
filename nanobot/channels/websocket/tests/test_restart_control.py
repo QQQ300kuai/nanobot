@@ -67,7 +67,7 @@ async def test_settings_restart_does_not_create_or_change_chat_history(history, 
         with monkeypatch.context() as patch:
             patch.setattr("nanobot.command.builtin.asyncio.create_task", discard_restart_task)
             response = await cmd_restart(CommandContext(
-                msg=message, session=None, key=message.session_key, raw=message.content, loop=MagicMock(),
+                msg=message, session=None, key=message.session_key, raw=message.content, loop=MagicMock(multi_user=None),
             ))
         await channel.send(response)
         calls = bus.publish_inbound.await_count

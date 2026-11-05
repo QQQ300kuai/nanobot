@@ -188,6 +188,36 @@ def settings_payload(
     )
 
 
+def chat_models_payload(*, config_path: Path | None = None) -> dict[str, Any]:
+    """Public model choices, without provider credentials or request configuration."""
+    config = _load_settings_config(config_path)
+    payload = models.model_settings_payload(config, oauth_status=_oauth_provider_status)
+    from nanobot.agent.model_presets import configured_chat_model_presets
+
+    available = configured_chat_model_presets(config) if config.multi_user.enabled else None
+    preset_fields = (
+        "name", "label", "active", "is_default", "model", "provider", "resolved_provider",
+        "max_tokens", "context_window_tokens", "temperature", "reasoning_effort",
+    )
+    agent_fields = (
+        "model", "provider", "resolved_provider", "has_api_key", "model_preset",
+        "max_tokens", "context_window_tokens", "temperature", "reasoning_effort",
+        "timezone", "tool_hint_max_length",
+    )
+    return {
+        "agent": {key: payload["agent"][key] for key in agent_fields},
+        "model_presets": [
+            {key: preset[key] for key in preset_fields} for preset in payload["model_presets"]
+            if available is None or preset["name"] in available
+        ],
+        "model_call_order": payload["model_call_order"],
+        "providers": [
+            {key: provider[key] for key in ("name", "label", "configured")}
+            for provider in payload["providers"]
+        ],
+    }
+
+
 def settings_usage_payload(*, config_path: Path | None = None) -> dict[str, Any]:
     return system.settings_usage_payload(_load_settings_config(config_path))
 

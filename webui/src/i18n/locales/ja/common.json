@@ -395,7 +395,37 @@
     "account": {
       "section": "アカウント",
       "logoutHint": "このブラウザーとゲートウェイの接続を切ります。",
-      "logout": "ログアウト"
+      "logout": "ログアウト",
+      "loginTitle": "nanobot にサインイン",
+      "userId": "ユーザー ID",
+      "password": "パスワード",
+      "signIn": "サインイン",
+      "loginRequired": "ユーザー ID とパスワードを入力してください",
+      "invalidCredentials": "ユーザー ID またはパスワードが正しくありません",
+      "tooManyRequests": "試行回数が多すぎます。しばらくしてからやり直してください",
+      "sessionExpired": "セッションが終了しました。もう一度サインインしてください",
+      "changePassword": "パスワードを変更",
+      "changePasswordHint": "このデバイスではサインインしたままになります。",
+      "currentPassword": "現在のパスワード",
+      "newPassword": "新しいパスワード",
+      "passwordRequired": "現在のパスワードと新しいパスワードを入力してください",
+      "cancel": "キャンセル",
+      "save": "保存",
+      "usage": {
+        "title": "過去 30 日間の使用量",
+        "tokens": "トークン",
+        "requests": "リクエスト",
+        "failed": "失敗したリクエスト",
+        "perUser": "ユーザー別の使用量",
+        "unowned": "未割り当て",
+        "userSummary": "{{tokens}} トークン、{{requests}} リクエスト"
+      },
+      "mcp": {
+        "title": "MCP サーバー",
+        "empty": "このアカウントで使える MCP サーバーはありません。",
+        "secretSaved": "保存済みです。空欄のままにすると変更されません。",
+        "replaceHint": "入力した項目は保存済みの値を置き換えます。空欄の項目は削除されます。"
+      }
     },
     "system": {
       "section": "システム",
@@ -570,6 +600,7 @@
       "ariaLabel": "設定セクション"
     },
     "nav": {
+      "account": "アカウント",
       "about": "nanobot について",
       "capabilities": "機能",
       "general": "一般",
@@ -1903,6 +1934,7 @@
         "run": "Shell コマンドを実行",
         "removeContext": "コマンドを実行する前に、添付ファイルと引用テキストを削除してください。"
       },
+      "followAdmin": "{{model}}（おすすめ）",
       "chooseAI": "モデルを選択",
       "switchModel": "モデルを切り替え",
       "manageModels": "プリセット管理",

@@ -38,7 +38,7 @@ from nanobot.agent.loop import AgentLoop  # noqa: E402
 from nanobot.agent.tools.mcp import MCPProvider  # noqa: E402
 from nanobot.agent.tools.registry import ToolRegistry  # noqa: E402
 from nanobot.cli import terminal as cli_terminal  # noqa: E402
-from nanobot.cli.agent import agent  # noqa: E402
+from nanobot.cli.agent import _refuse_multi_user, agent  # noqa: E402
 from nanobot.cli.gateway import create_gateway_app  # noqa: E402
 from nanobot.cli.gateway_runtime import _run_gateway  # noqa: E402
 from nanobot.cli.log_control import _set_nanobot_logs  # noqa: E402
@@ -344,6 +344,7 @@ def serve(
 ):
     """Start the OpenAI-compatible API server (/v1/chat/completions)."""
     runtime_config = _load_runtime_config(config, workspace)
+    _refuse_multi_user(runtime_config, "nanobot serve")
     try:
         from aiohttp import web  # noqa: F401
     except ImportError:

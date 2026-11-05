@@ -103,7 +103,7 @@ class TestMidTurnCommandDispatchedDirectly:
 
     @pytest.fixture()
     def fake_loop(self) -> MagicMock:
-        loop = MagicMock()
+        loop = MagicMock(multi_user=None)
         loop.sessions = MagicMock()
         loop.sessions.state.get = AsyncMock(return_value=MagicMock(
             key="test:chat1", messages=[], last_archived=0, clear=MagicMock(),
@@ -243,7 +243,7 @@ class TestPairingCommandDispatch:
         )
         ctx = CommandContext(
             msg=fake_msg, session=None,
-            key="telegram:chat1", raw="/pairing list", args="list", loop=MagicMock(),
+            key="telegram:chat1", raw="/pairing list", args="list", loop=MagicMock(multi_user=None),
         )
         result = await router.dispatch(ctx)
         assert result is not None
@@ -262,7 +262,7 @@ class TestPairingCommandDispatch:
         ctx = CommandContext(
             msg=fake_msg, session=None,
             key="telegram:chat1", raw="/pairing approve ABCD-EFGH",
-            args="approve ABCD-EFGH", loop=MagicMock(),
+            args="approve ABCD-EFGH", loop=MagicMock(multi_user=None),
         )
         result = await router.dispatch(ctx)
         assert result is not None
@@ -284,7 +284,7 @@ class TestPairingCommandDispatch:
         ctx = CommandContext(
             msg=fake_msg, session=None,
             key="telegram:chat1", raw="/pairing revoke 123",
-            args="revoke 123", loop=MagicMock(),
+            args="revoke 123", loop=MagicMock(multi_user=None),
         )
         result = await router.dispatch(ctx)
         assert result is not None

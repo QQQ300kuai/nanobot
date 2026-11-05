@@ -22,6 +22,7 @@ from nanobot.agent.skill_metadata import (
     valid_skill_metadata as valid_skill_metadata,
 )
 from nanobot.runtime_context import RuntimeContextBlock
+from nanobot.utils import confined_files
 
 _SKILL_REFERENCE = re.compile(r"(?<![\w$])\$([A-Za-z0-9_-]+)")
 
@@ -48,6 +49,8 @@ class SkillsLoader:
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self.disabled_skills = disabled_skills or set()
+        # Workspace and plugin skills of an account workspace never follow a link out of it.
+        self._confine_root = confined_files.confinement_root(workspace)
         self._snapshot: ContextVar[_SkillSnapshot | None] = ContextVar("skill_snapshot", default=None)
 
     @contextmanager
@@ -176,7 +179,11 @@ class SkillsLoader:
         snapshot = self._snapshot.get()
         if snapshot is not None and resolved in snapshot.documents:
             return snapshot.documents[resolved]
-        content = Path(entry["path"]).read_text(encoding="utf-8")
+        root = self._confine_root if entry["source"] != "builtin" else None
+        try:
+            content = confined_files.read_text(Path(entry["path"]), root=root)
+        except confined_files.PathEscapeError:
+            return None
         if snapshot is not None:
             snapshot.documents[resolved] = content
         return content

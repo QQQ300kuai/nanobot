@@ -10,6 +10,7 @@ import type {
   ChannelConnectPayload,
   ChannelValidationPayload,
   ChatSummary,
+  ChatModelsPayload,
   CliAppsPayload,
   FilePreviewPayload,
   FileReferenceMetadata,
@@ -752,6 +753,10 @@ export async function deleteSession(
       ...(options?.deleteAutomations ? { delete_automations: true } : {}),
     },
   );
+}
+
+export async function fetchChatModels(token: string): Promise<ChatModelsPayload> {
+  return request("/api/chat-models", token, undefined, API_READ_TIMEOUT_MS);
 }
 
 export async function fetchSettings(

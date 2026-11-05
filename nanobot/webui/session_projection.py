@@ -9,7 +9,11 @@ from nanobot.providers.base import LLMUsage
 from nanobot.session.model_selection import model_preset_from_metadata
 from nanobot.session.recovery import recovery_state_from_metadata
 from nanobot.session.state import SessionState
-from nanobot.session.webui_turns import websocket_turn_id, websocket_turn_wall_started_at
+from nanobot.session.webui_turns import (
+    websocket_turn_id,
+    websocket_turn_scope,
+    websocket_turn_wall_started_at,
+)
 from nanobot.webui.goal_state import goal_state_ws_blob
 
 if TYPE_CHECKING:
@@ -32,10 +36,12 @@ class WebUISessionProjection:
         *,
         subagent_manager: SubagentManager | None = None,
         log: Any = default_logger,
+        account: str | None = None,
     ) -> None:
         self._sessions = sessions
         self._subagents = subagent_manager
         self._log = log
+        self._turn_scope = websocket_turn_scope(account)
 
     def subagent_task(self, session_key: str, task_id: str) -> dict[str, object] | None:
         """Read the current public snapshot only while the parent still owns it."""
@@ -108,10 +114,9 @@ class WebUISessionProjection:
         metadata = cast(dict[str, Any], raw_metadata) if isinstance(raw_metadata, dict) else {}
         return goal_state_ws_blob(metadata)
 
-    @staticmethod
-    def active_turn_status(chat_id: str) -> tuple[float, str | None] | None:
+    def active_turn_status(self, chat_id: str) -> tuple[float, str | None] | None:
         """Return same-process running-turn state for reconnect hydration."""
-        started_at = websocket_turn_wall_started_at(chat_id)
+        started_at = websocket_turn_wall_started_at(chat_id, **self._turn_scope)
         if started_at is None:
             return None
-        return started_at, websocket_turn_id(chat_id)
+        return started_at, websocket_turn_id(chat_id, **self._turn_scope)

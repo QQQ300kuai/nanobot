@@ -169,6 +169,9 @@ class ExecTool(Tool):
     @classmethod
     def create(cls, ctx: ToolContext) -> Tool:
         cfg = ctx.config.exec
+        multi_user = ctx.multi_user if ctx.multi_user and ctx.multi_user.enabled else None
+        if multi_user and ctx.media_dir is None:
+            raise ValueError("Multi-user exec requires a per-user media_dir in the tool context")
         return cls(
             working_dir=ctx.workspace,
             max_runtime=cfg.max_runtime,
@@ -177,7 +180,9 @@ class ExecTool(Tool):
             idle_action=cfg.idle_action,
             restrict_to_workspace=ctx.config.restrict_to_workspace,
             webui_allow_local_service_access=ctx.config.webui_allow_local_service_access,
-            sandbox=cfg.sandbox,
+            sandbox="bwrap" if multi_user else cfg.sandbox,
+            sandbox_net=multi_user.sandbox_net if multi_user else "share",
+            sandbox_media_dir=ctx.media_dir if multi_user else None,
             path_prepend=cfg.path_prepend,
             path_append=cfg.path_append,
             sandbox_ro_binds=cfg.sandbox_ro_binds,
@@ -209,6 +214,8 @@ class ExecTool(Tool):
         max_runtime_limit: int | None = None,
         idle_timeout: int = 300,
         idle_action: Literal["report", "terminate"] = "report",
+        sandbox_net: Literal["share", "none"] = "share",
+        sandbox_media_dir: Path | None = None,
     ):
         if timeout is not None and max_runtime is not None:
             raise ValueError("timeout and max_runtime are mutually exclusive")
@@ -220,6 +227,8 @@ class ExecTool(Tool):
         self._exec_config = ExecToolConfig.model_validate(values)
         self.working_dir = working_dir
         self.sandbox = sandbox
+        self.sandbox_net = sandbox_net
+        self.sandbox_media_dir = sandbox_media_dir
         self.deny_patterns = (deny_patterns or []) + [
             r"\brm\s+-[rf]{1,2}\b",
             r"\bdel\s+/[fq]\b",
@@ -444,6 +453,8 @@ class ExecTool(Tool):
                     cwd,
                     sandbox_ro_binds=[str(p) for p in self.sandbox_ro_binds],
                     sandbox_rw_binds=[str(p) for p in self.sandbox_rw_binds],
+                    media_dir=self.sandbox_media_dir,
+                    net=self.sandbox_net,
                 )
                 command = shlex.split(wrapped) if isinstance(command, list) else wrapped
                 cwd = str(Path(workspace).resolve())
@@ -903,7 +914,7 @@ class ExecTool(Tool):
                 if self._is_benign_device_path(str(p)):
                     continue
 
-                media_path = get_media_dir().resolve()
+                media_path = (self.sandbox_media_dir or get_media_dir()).resolve()
                 allowed = (
                     is_path_within(p, cwd_path)
                     or is_path_within(p, media_path)

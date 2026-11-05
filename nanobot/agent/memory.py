@@ -25,9 +25,9 @@ from nanobot.providers.conversation_state import ProviderConversationStateContro
 from nanobot.runtime_context import public_history_messages
 from nanobot.session.manager import Session, SessionManager
 from nanobot.session.summary import is_summary_checkpoint, session_summary_from_metadata
+from nanobot.utils import confined_files
 from nanobot.utils.gitstore import GitStore
 from nanobot.utils.helpers import (
-    atomic_write_lines,
     build_assistant_message,
     content_with_media_breadcrumbs,
     ensure_dir,
@@ -66,6 +66,8 @@ class MemoryStore:
     def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
         self.workspace = workspace
         self.max_history_entries = max_history_entries
+        # A multi-user account's workspace: never follow a link its sandbox planted.
+        self.confine_root = confined_files.confinement_root(workspace)
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
@@ -89,12 +91,16 @@ class MemoryStore:
         return self._git
 
 
-    @staticmethod
-    def read_file(path: Path) -> str:
+    def read_file(self, path: Path) -> str:
         try:
-            return path.read_text(encoding="utf-8")
+            return confined_files.read_text(path, root=self.confine_root)
         except FileNotFoundError:
             return ""
+
+    def _write_text(self, path: Path, content: str) -> None:
+        # A refused (escaping) path is logged by the helper and skipped, never raised to a turn.
+        with suppress(confined_files.PathEscapeError):
+            confined_files.write_text(path, content, root=self.confine_root)
 
     def _maybe_migrate_legacy_history(self) -> None:
         """One-time upgrade from legacy HISTORY.md to history.jsonl.
@@ -108,9 +114,8 @@ class MemoryStore:
             return
 
         try:
-            legacy_text = self.legacy_history_file.read_text(
-                encoding="utf-8",
-                errors="replace",
+            legacy_text = confined_files.read_text(
+                self.legacy_history_file, root=self.confine_root, errors="replace",
             )
         except OSError:
             logger.exception("Failed to read legacy HISTORY.md for migration")
@@ -121,10 +126,10 @@ class MemoryStore:
             if entries:
                 self._write_entries(entries)
                 last_cursor = entries[-1]["cursor"]
-                self._cursor_file.write_text(str(last_cursor), encoding="utf-8")
+                self._write_text(self._cursor_file, str(last_cursor))
                 # Default to "already processed" so upgrades do not replay the
                 # user's entire historical archive into Dream on first start.
-                self._dream_cursor_file.write_text(str(last_cursor), encoding="utf-8")
+                self._write_text(self._dream_cursor_file, str(last_cursor))
 
             backup_path = self._next_legacy_backup_path()
             self.legacy_history_file.replace(backup_path)
@@ -222,21 +227,21 @@ class MemoryStore:
         return self.read_file(self.memory_file)
 
     def write_memory(self, content: str) -> None:
-        self.memory_file.write_text(content, encoding="utf-8")
+        self._write_text(self.memory_file, content)
 
 
     def read_soul(self) -> str:
         return self.read_file(self.soul_file)
 
     def write_soul(self, content: str) -> None:
-        self.soul_file.write_text(content, encoding="utf-8")
+        self._write_text(self.soul_file, content)
 
 
     def read_user(self) -> str:
         return self.read_file(self.user_file)
 
     def write_user(self, content: str) -> None:
-        self.user_file.write_text(content, encoding="utf-8")
+        self._write_text(self.user_file, content)
 
     def get_memory_context(self) -> str:
         """Return long-term memory formatted for context injection."""
@@ -305,9 +310,11 @@ class MemoryStore:
             record = {"cursor": cursor, "timestamp": ts, "content": content}
             if session_key:
                 record["session_key"] = session_key
-            with open(self.history_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self._cursor_file.write_text(str(cursor), encoding="utf-8")
+            with suppress(confined_files.PathEscapeError):
+                confined_files.append_text(
+                    self.history_file, json.dumps(record, ensure_ascii=False) + "\n", root=self.confine_root,
+                )
+            self._write_text(self._cursor_file, str(cursor))
         return cursor
 
     @staticmethod
@@ -360,7 +367,7 @@ class MemoryStore:
         if not self._cursor_file.exists():
             return None
         with suppress(ValueError, OSError):
-            cursor = int(self._cursor_file.read_text(encoding="utf-8").strip())
+            cursor = int(confined_files.read_text(self._cursor_file, root=self.confine_root).strip())
             if cursor >= 0:
                 return cursor
         return None
@@ -420,7 +427,7 @@ class MemoryStore:
     def _read_entries(self) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
         with suppress(FileNotFoundError):
-            with open(self.history_file, "r", encoding="utf-8") as f:
+            with confined_files.open_read(self.history_file, root=self.confine_root) as f:
                 for line in f:
                     line = line.strip()
                     if line:
@@ -435,7 +442,7 @@ class MemoryStore:
 
     def _read_last_entry(self) -> dict[str, Any] | None:
         try:
-            with open(self.history_file, "rb") as f:
+            with confined_files.open_read(self.history_file, root=self.confine_root, binary=True) as f:
                 f.seek(0, 2)
                 size = f.tell()
                 if size == 0:
@@ -452,20 +459,21 @@ class MemoryStore:
             return None
 
     def _write_entries(self, entries: list[dict[str, Any]]) -> None:
-        atomic_write_lines(
+        confined_files.replace_lines(
             self.history_file,
             (json.dumps(entry, ensure_ascii=False) for entry in entries),
+            root=self.confine_root,
         )
 
 
     def get_last_dream_cursor(self) -> int:
         if self._dream_cursor_file.exists():
             with suppress(ValueError, OSError):
-                return int(self._dream_cursor_file.read_text(encoding="utf-8").strip())
+                return int(confined_files.read_text(self._dream_cursor_file, root=self.confine_root).strip())
         return 0
 
     def set_last_dream_cursor(self, cursor: int) -> None:
-        self._dream_cursor_file.write_text(str(cursor), encoding="utf-8")
+        self._write_text(self._dream_cursor_file, str(cursor))
 
     def get_latest_cursor(self) -> int:
         return max(self._next_cursor() - 1, 0)
