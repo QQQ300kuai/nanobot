@@ -1,3 +1,9 @@
+docker compose -p nb-demo \
+  --env-file /tmp/nb-demo/work/.env \
+  -f docker-compose.yml \
+  -f docker-compose.multiuser.yml \
+  -f /tmp/nb-demo/work/override.yml \
+  up -d --build nanobot-gateway
 # Multi-User Deployment
 
 Multi-user mode lets one gateway serve several accounts. Each account gets its own workspace, sessions, memory, uploads, usage records, and MCP settings, and every account's shell commands run in a bubblewrap sandbox. This page covers the Docker Compose setup, the two files an administrator maintains, and the limits you accept by running it.
@@ -127,6 +133,15 @@ The same steps work on Linux and macOS. The container is always Linux, so the sa
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.multiuser.yml up -d --build nanobot-gateway
    docker compose -f docker-compose.yml -f docker-compose.multiuser.yml logs -f nanobot-gateway
+   ```
+   > for test 
+   ```bash
+   docker compose -p nb-demo \
+    --env-file /tmp/nb-demo/work/.env \
+    -f docker-compose.yml \
+    -f docker-compose.multiuser.yml \
+    -f /tmp/nb-demo/work/override.yml \
+    up -d --build nanobot-gateway
    ```
 
 4. Open `http://127.0.0.1:8765`, log in with an account id from the users file and the initial password, and change the password.
